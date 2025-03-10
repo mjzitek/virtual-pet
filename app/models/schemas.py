@@ -49,9 +49,13 @@ PET_EVENT_SCHEMA = {
                             }
                         },
                         "required": ["hunger", "energy", "happiness"]
+                    },
+                    "reseasoning": {
+                        "type": "string",
+                        "description": "A short description of the reasoning behind the story text and the choices"
                     }
                 },
-                "required": ["text", "effect"]
+                "required": ["text", "effect", "reseasoning"]
             },
             "minItems": 2,
             "maxItems": 4,

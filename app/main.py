@@ -50,6 +50,10 @@ def initialize_session_state():
         # Ensure current_event is initialized even if not in saved data
         if "current_event" not in st.session_state:
             st.session_state["current_event"] = None
+            
+        # Ensure previous_events is initialized
+        if "previous_events" not in st.session_state:
+            st.session_state["previous_events"] = []
     else:
         # Default initialization
         if "setup_complete" not in st.session_state:
@@ -66,6 +70,9 @@ def initialize_session_state():
             
         if "current_event" not in st.session_state:
             st.session_state["current_event"] = None
+            
+        if "previous_events" not in st.session_state:
+            st.session_state["previous_events"] = []
 
 # Function to handle pet setup completion
 def complete_setup():
@@ -84,6 +91,9 @@ def complete_setup():
         
         st.session_state["setup_complete"] = True
         
+        # Initialize previous_events array
+        st.session_state["previous_events"] = []
+        
         # Generate an initial story for the pet
         st.session_state["current_event"] = event_service.generate_story(
             st.session_state["pet_state"],
@@ -97,9 +107,13 @@ def complete_setup():
             "pet_type": st.session_state["pet_type"],
             "pet_state": st.session_state["pet_state"],
             "setup_complete": st.session_state["setup_complete"],
-            "current_event": st.session_state["current_event"]
+            "current_event": st.session_state["current_event"],
+            "previous_events": st.session_state["previous_events"]
         }
         pet_service.save_pet_data(pet_data)
+        
+        # Force a rerun to update the UI with the initial story
+        st.rerun()
 
 # Function to update pet state
 def update_pet_state(action):
@@ -115,11 +129,23 @@ def update_pet_state(action):
         action
     )
     
+    # Add the action to previous events
+    action_summary = f"{st.session_state['pet_name']} was {action}ed."
+    if "previous_events" not in st.session_state:
+        st.session_state["previous_events"] = []
+    st.session_state["previous_events"].append(action_summary)
+    
+    # Keep only the last 15 events to avoid context getting too long
+    # (The summary will be used if more than 10)
+    if len(st.session_state["previous_events"]) > 15:
+        st.session_state["previous_events"] = st.session_state["previous_events"][-15:]
+    
     # Always generate a new event after an action
     st.session_state["current_event"] = event_service.generate_event(
         st.session_state["pet_state"],
         st.session_state["pet_type"],
-        st.session_state["pet_name"]
+        st.session_state["pet_name"],
+        st.session_state["previous_events"]
     )
     
     # Save the updated state
@@ -128,9 +154,13 @@ def update_pet_state(action):
         "pet_type": st.session_state["pet_type"],
         "pet_state": st.session_state["pet_state"],
         "setup_complete": st.session_state["setup_complete"],
-        "current_event": st.session_state["current_event"]
+        "current_event": st.session_state["current_event"],
+        "previous_events": st.session_state["previous_events"]
     }
     pet_service.save_pet_data(pet_data)
+    
+    # Force a rerun to update the UI with the new event
+    st.rerun()
 
 # Function to handle event choice
 def handle_event_choice(choice_index):
@@ -141,9 +171,12 @@ def handle_event_choice(choice_index):
         choice_index: The index of the chosen option
     """
     if st.session_state["current_event"]:
+        event = st.session_state["current_event"]
+        chosen_option = event["options"][choice_index]
+        
         # Get the effects of the choice
         effects = event_service.handle_event_choice(
-            st.session_state["current_event"], 
+            event, 
             choice_index
         )
         
@@ -153,11 +186,23 @@ def handle_event_choice(choice_index):
             effects
         )
         
+        # Add the event and choice to previous events - store the full description
+        event_summary = f"Event: {event['title']} - Description: {event['description']} - Chose: {chosen_option['text']}"
+        if "previous_events" not in st.session_state:
+            st.session_state["previous_events"] = []
+        st.session_state["previous_events"].append(event_summary)
+        
+        # Keep only the last 15 events to avoid context getting too long
+        # (The summary will be used if more than 10)
+        if len(st.session_state["previous_events"]) > 15:
+            st.session_state["previous_events"] = st.session_state["previous_events"][-15:]
+        
         # Generate a new event after the choice
         st.session_state["current_event"] = event_service.generate_event(
             st.session_state["pet_state"],
             st.session_state["pet_type"],
-            st.session_state["pet_name"]
+            st.session_state["pet_name"],
+            st.session_state["previous_events"]
         )
         
         # Save the updated state
@@ -166,9 +211,13 @@ def handle_event_choice(choice_index):
             "pet_type": st.session_state["pet_type"],
             "pet_state": st.session_state["pet_state"],
             "setup_complete": st.session_state["setup_complete"],
-            "current_event": st.session_state["current_event"]
+            "current_event": st.session_state["current_event"],
+            "previous_events": st.session_state["previous_events"]
         }
         pet_service.save_pet_data(pet_data)
+        
+        # Force a rerun to update the UI with the new event
+        st.rerun()
 
 # Function to reset pet
 def reset_pet():
@@ -194,7 +243,11 @@ def main():
     # Initialize session state
     initialize_session_state()
     
-    st.title("🐾 Virtual Pet Simulator")
+    # Dynamic title based on setup status
+    if st.session_state["setup_complete"]:
+        st.title(f"🐾 {st.session_state['pet_name']}'s Great Adventure")
+    else:
+        st.title("🐾 Virtual Pet Simulator")
     
     # Welcome screen and pet setup
     if not st.session_state["setup_complete"]:
@@ -259,9 +312,29 @@ def main():
 
         with col1:
             st.subheader(f"{st.session_state['pet_name']}'s Status")
-            st.text(f"Hunger: {st.session_state['pet_state']['hunger']}/10")
-            st.text(f"Energy: {st.session_state['pet_state']['energy']}/10")
-            st.text(f"Happiness: {st.session_state['pet_state']['happiness']}/10")
+            
+            # Enhanced stats display with custom styling
+            stats = [
+                {"name": "Hunger", "value": st.session_state['pet_state']['hunger'], "max": 10},
+                {"name": "Energy", "value": st.session_state['pet_state']['energy'], "max": 10},
+                {"name": "Happiness", "value": st.session_state['pet_state']['happiness'], "max": 10}
+            ]
+            
+            for stat in stats:
+                # Calculate percentage for the progress bar
+                percentage = (stat["value"] / stat["max"]) * 100
+                
+                # Choose color based on value (red if low, green if high)
+                color = "#ff4b4b" if percentage < 30 else "#4bb543" if percentage > 70 else "#f9c846"
+                
+                st.markdown(f"""
+                <div style="margin-bottom: 20px;">
+                    <div style="font-size: 18px; font-weight: 500; margin-bottom: 5px;">{stat["name"]}: {stat["value"]}/{stat["max"]}</div>
+                    <div style="background-color: #e0e0e0; border-radius: 10px; height: 10px; width: 100%;">
+                        <div style="background-color: {color}; width: {percentage}%; height: 10px; border-radius: 10px;"></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
             
             # Only show action buttons if there's no active event
             if not st.session_state.get("current_event"):
@@ -269,16 +342,12 @@ def main():
                 st.button("Play", on_click=update_pet_state, args=("play",))
                 st.button("Rest", on_click=update_pet_state, args=("rest",))
             
-            # Add a small separator
-            st.markdown("---")
-            # Add a reset button at the bottom (optional - for testing or if user wants to start over)
-            st.button("Reset Pet", on_click=reset_pet, type="secondary", help="Start over with a new pet")
 
         with col2:
             # Display the pet image
             mood = st.session_state["pet_state"]["mood"]
             image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
-            st.image(image_path, use_container_width=True)
+            st.image(image_path, width=450)
             
             # If there's no event, show the pet's mood
             if not st.session_state.get("current_event"):
@@ -291,8 +360,10 @@ def main():
             # Create a container for the event
             with st.container():
                 st.markdown("---")
-                st.markdown(f"## 🎬 {event['title']}")
-                st.markdown(f"*{event['description']}*")
+                st.markdown(f'<div style="font-size: 20px;">{event["description"]}</div>', unsafe_allow_html=True)
+                
+                # Add extra space between description and options
+                st.markdown("<br>", unsafe_allow_html=True)
                 
                 # Display the options as numbered buttons
                 st.subheader("What will you do?")
@@ -342,6 +413,12 @@ def main():
                     
                     # Add some space between options
                     st.markdown("")
+
+        # Add the reset button at the very bottom of the page
+        st.markdown("---")
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.button("Reset Pet", on_click=reset_pet, type="secondary", help="Start over with a new pet")
 
 if __name__ == "__main__":
     main() 
