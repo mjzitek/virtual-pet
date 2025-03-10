@@ -16,6 +16,7 @@ from app.config.settings import (
     EVENT_CHANCE_NORMAL, EVENT_CHANCE_CRITICAL,
     CRITICAL_STAT_THRESHOLD
 )
+from app.data.story_starters import STORY_STARTERS
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -91,19 +92,28 @@ class EventService:
             return None
         
         try:
+            # Select a random story starter
+            story_starter = random.choice(STORY_STARTERS)
+            location = story_starter["location"]
+            scenario = story_starter["scenario"]
+            
             # This is a placeholder - you'll implement the specific prompts later
             system_prompt = "You are an AI assistant that generates stories for a virtual pet application."
             user_prompt = f"""Generate a base story for a {pet_type} named {pet_name}.
 
-            Generate a story that is 2-3 paragraphs long.  Make it fun and engaging.
+            STORY STARTER:
+            Location: {location}
+            Scenario: {scenario}
+
+            Using the story starter above, generate a story that is 2-3 paragraphs long. Make it fun and engaging.
             
-            Create an engaging scenario with 2 options for the user to choose from.  Use JSON format.
+            Create an engaging scenario with 2 options for the user to choose from. Use JSON format.
 
             Set stats to following:
             - Hunger: 8/10
             - Energy: 8/10
             - Happiness: 8/10
-            - Current mood: happys
+            - Current mood: happy
             """
             print(user_prompt)
             
