@@ -20,6 +20,9 @@ def main():
     # Add the current directory to the Python path
     sys.path.insert(0, script_dir)
     
+    # Print a message to indicate which file is being run
+    print("Starting Virtual Pet Application using app/main.py...")
+    
     # Run the Streamlit application
     subprocess.run(["streamlit", "run", "app/main.py"])
 

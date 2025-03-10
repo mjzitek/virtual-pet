@@ -108,6 +108,14 @@ def update_pet_state(action):
         action
     )
     
+    # Always generate an event after an action (for testing purposes)
+    # In a production environment, you might want to use the random chance logic instead
+    st.session_state["current_event"] = event_service.generate_event(
+        st.session_state["pet_state"],
+        st.session_state["pet_type"],
+        st.session_state["pet_name"]
+    )
+    
     # Save the updated state
     pet_data = {
         "pet_name": st.session_state["pet_name"],
@@ -117,14 +125,6 @@ def update_pet_state(action):
         "current_event": st.session_state["current_event"]
     }
     pet_service.save_pet_data(pet_data)
-    
-    # Check if an event should be triggered
-    #if event_service.should_trigger_event(st.session_state["pet_state"]):
-    st.session_state["current_event"] = event_service.generate_event(
-        st.session_state["pet_state"],
-        st.session_state["pet_type"],
-        st.session_state["pet_name"]
-    )
 
 # Function to handle event choice
 def handle_event_choice(choice_index):
@@ -167,11 +167,14 @@ def reset_pet():
     for key in ["setup_complete", "pet_name", "pet_type", "pet_state", "current_event"]:
         if key in st.session_state:
             del st.session_state[key]
-    st.experimental_rerun()
+    st.rerun()
 
 # Main application UI
 def main():
     """Main application function."""
+    # Print a message to indicate this file is being run
+    print("Running app/main.py - Virtual Pet Application with Event System")
+    
     # Initialize session state
     initialize_session_state()
     
@@ -235,46 +238,94 @@ def main():
     
     # Main pet interface (only shown after setup is complete)
     else:
-        # Check if there's an active event
-        if "current_event" in st.session_state and st.session_state["current_event"]:
-            # Display the event
-            event = st.session_state["current_event"]
-            st.header(event["title"])
-            st.write(event["description"])
-            
-            # Display the options
-            st.subheader("What will you do?")
-            for i, option in enumerate(event["options"]):
-                st.button(
-                    option["text"],
-                    key=f"option_{i}",
-                    on_click=handle_event_choice,
-                    args=(i,)
-                )
-        else:
-            # Regular pet interface
-            col1, col2 = st.columns([1, 2])
+        # Create a layout with two columns
+        col1, col2 = st.columns([1, 2])
 
-            with col1:
-                st.subheader(f"{st.session_state['pet_name']}'s Status")
-                st.text(f"Hunger: {st.session_state['pet_state']['hunger']}/10")
-                st.text(f"Energy: {st.session_state['pet_state']['energy']}/10")
-                st.text(f"Happiness: {st.session_state['pet_state']['happiness']}/10")
-                
+        with col1:
+            st.subheader(f"{st.session_state['pet_name']}'s Status")
+            st.text(f"Hunger: {st.session_state['pet_state']['hunger']}/10")
+            st.text(f"Energy: {st.session_state['pet_state']['energy']}/10")
+            st.text(f"Happiness: {st.session_state['pet_state']['happiness']}/10")
+            
+            # Only show action buttons if there's no active event
+            if not st.session_state.get("current_event"):
                 st.button("Feed", on_click=update_pet_state, args=("feed",))
                 st.button("Play", on_click=update_pet_state, args=("play",))
                 st.button("Rest", on_click=update_pet_state, args=("rest",))
-                
-                # Add a small separator
-                st.markdown("---")
-                # Add a reset button at the bottom (optional - for testing or if user wants to start over)
-                st.button("Reset Pet", on_click=reset_pet, type="secondary", help="Start over with a new pet")
+            
+            # Add a small separator
+            st.markdown("---")
+            # Add a reset button at the bottom (optional - for testing or if user wants to start over)
+            st.button("Reset Pet", on_click=reset_pet, type="secondary", help="Start over with a new pet")
 
-            with col2:
-                mood = st.session_state["pet_state"]["mood"]
-                image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
-                st.image(image_path, use_container_width=True)
+        with col2:
+            # Display the pet image
+            mood = st.session_state["pet_state"]["mood"]
+            image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
+            st.image(image_path, use_container_width=True)
+            
+            # If there's no event, show the pet's mood
+            if not st.session_state.get("current_event"):
                 st.subheader(f"{st.session_state['pet_name']} looks {mood}!")
+            
+        # Check if there's an active event - display it below the pet image
+        if "current_event" in st.session_state and st.session_state["current_event"]:
+            event = st.session_state["current_event"]
+            
+            # Create a container for the event
+            with st.container():
+                st.markdown("---")
+                st.markdown(f"## 🎬 {event['title']}")
+                st.markdown(f"*{event['description']}*")
+                
+                # Display the options as numbered buttons
+                st.subheader("What will you do?")
+                
+                # Create a custom component for each option
+                for i, option in enumerate(event["options"]):
+                    # Format the option text with effects
+                    effects = option["effect"]
+                    effects_text = []
+                    if effects["hunger"] != 0:
+                        effects_text.append(f"Hunger: {'+'if effects['hunger'] > 0 else ''}{effects['hunger']}")
+                    if effects["energy"] != 0:
+                        effects_text.append(f"Energy: {'+'if effects['energy'] > 0 else ''}{effects['energy']}")
+                    if effects["happiness"] != 0:
+                        effects_text.append(f"Happiness: {'+'if effects['happiness'] > 0 else ''}{effects['happiness']}")
+                    
+                    # Format the effects text
+                    effects_str = f" ({', '.join(effects_text)})" if effects_text else ""
+                    
+                    # Create a custom component with columns
+                    cols = st.columns([1, 15])
+                    
+                    # Number in the first column
+                    with cols[0]:
+                        # Create a circular container for the number
+                        st.markdown(f"""
+                        <div style="
+                            width: 30px;
+                            height: 30px;
+                            border-radius: 50%;
+                            background-color: #f0f2f6;
+                            border: 1px solid #ccc;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-weight: bold;
+                        ">
+                            {i+1}
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Option text in the second column
+                    with cols[1]:
+                        # Create a button that looks like text
+                        if st.button(f"{option['text']}{effects_str}", key=f"option_{i}"):
+                            handle_event_choice(i)
+                    
+                    # Add some space between options
+                    st.markdown("")
 
 if __name__ == "__main__":
     main() 
