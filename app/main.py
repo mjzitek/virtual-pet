@@ -38,6 +38,7 @@ def initialize_session_state():
     
     # Check if we have saved pet data for this session
     saved_data = pet_service.load_pet_data(st.session_state["session_id"])
+    print(f"Debug - Loaded saved data: {saved_data is not None}")
     
     if saved_data:
         # Restore from saved data
@@ -52,6 +53,8 @@ def initialize_session_state():
                         st.session_state[key] = "cat"  # Default to cat if not found
                 else:
                     st.session_state[key] = value
+                    
+        print(f"Debug - Restored story_title from saved data: {st.session_state.get('story_title', 'Not found')}")
         
         # Ensure current_event is initialized even if not in saved data
         if "current_event" not in st.session_state:
@@ -60,6 +63,17 @@ def initialize_session_state():
         # Ensure previous_events is initialized
         if "previous_events" not in st.session_state:
             st.session_state["previous_events"] = []
+            
+        # Ensure event_counter is initialized
+        if "event_counter" not in st.session_state:
+            st.session_state["event_counter"] = 0
+            
+        # Ensure story_title is initialized with a valid value
+        if "story_title" not in st.session_state or not st.session_state["story_title"]:
+            st.session_state["story_title"] = f"{st.session_state['pet_name']}'s Great Adventure"
+            # Set flag to regenerate title on next cycle
+            st.session_state["regenerate_title"] = True
+            print("Debug - Set regenerate_title flag because story_title was missing or empty")
     else:
         # Default initialization
         if "setup_complete" not in st.session_state:
@@ -79,6 +93,15 @@ def initialize_session_state():
             
         if "previous_events" not in st.session_state:
             st.session_state["previous_events"] = []
+            
+        if "event_counter" not in st.session_state:
+            st.session_state["event_counter"] = 0
+            
+        if "story_title" not in st.session_state:
+            st.session_state["story_title"] = "Virtual Pet Simulator"
+
+        if "young_reader_mode" not in st.session_state:
+            st.session_state["young_reader_mode"] = False
 
 # Function to handle pet setup completion
 def complete_setup():
@@ -95,10 +118,16 @@ def complete_setup():
         selected_index = pet_display_names.index(selected_display_name)
         st.session_state["pet_type"] = pet_options[selected_index]  # This is the internal key like "cat"
         
+        # Set young reader mode from checkbox
+        st.session_state["young_reader_mode"] = st.session_state.get("young_reader_mode_checkbox", False)
+        
         st.session_state["setup_complete"] = True
         
         # Initialize previous_events array
         st.session_state["previous_events"] = []
+        
+        # Set the flag to generate a new title
+        st.session_state["regenerate_title"] = True
         
         # Generate an initial story for the pet
         with st.spinner("Creating your pet's first adventure..."):
@@ -108,6 +137,16 @@ def complete_setup():
                 st.session_state["pet_name"]
             )
         
+        # Generate a title for the pet's adventure
+        with st.spinner("Creating a title for your pet's adventure..."):
+            story_title = event_service.generate_story_title(
+                pet_name=st.session_state["pet_name"],
+                pet_type=st.session_state["pet_type"],
+                current_event=st.session_state["current_event"]
+            )
+            st.session_state["story_title"] = story_title
+            print(f"Initial title generated: {story_title}")
+        
         # Save the data after setup is complete
         pet_data = {
             "pet_name": st.session_state["pet_name"],
@@ -115,7 +154,9 @@ def complete_setup():
             "pet_state": st.session_state["pet_state"],
             "setup_complete": st.session_state["setup_complete"],
             "current_event": st.session_state["current_event"],
-            "previous_events": st.session_state["previous_events"]
+            "previous_events": st.session_state["previous_events"],
+            "story_title": st.session_state["story_title"],
+            "young_reader_mode": st.session_state["young_reader_mode"]
         }
         pet_service.save_pet_data(pet_data, st.session_state["session_id"])
         
@@ -156,6 +197,10 @@ def update_pet_state(action):
             st.session_state["previous_events"]
         )
     
+    # Ensure we have a valid story title
+    if "story_title" not in st.session_state or not st.session_state["story_title"]:
+        st.session_state["story_title"] = f"{st.session_state['pet_name']}'s Great Adventure"
+    
     # Save the updated state
     pet_data = {
         "pet_name": st.session_state["pet_name"],
@@ -163,7 +208,9 @@ def update_pet_state(action):
         "pet_state": st.session_state["pet_state"],
         "setup_complete": st.session_state["setup_complete"],
         "current_event": st.session_state["current_event"],
-        "previous_events": st.session_state["previous_events"]
+        "previous_events": st.session_state["previous_events"],
+        "story_title": st.session_state["story_title"],
+        "event_counter": st.session_state.get("event_counter", 0)
     }
     pet_service.save_pet_data(pet_data, st.session_state["session_id"])
     
@@ -205,6 +252,16 @@ def handle_event_choice(choice_index):
         if len(st.session_state["previous_events"]) > 15:
             st.session_state["previous_events"] = st.session_state["previous_events"][-15:]
         
+        # Occasionally regenerate the title (every 3 events)
+        if "event_counter" not in st.session_state:
+            st.session_state["event_counter"] = 1
+        else:
+            st.session_state["event_counter"] += 1
+            
+        if st.session_state["event_counter"] % 3 == 0:
+            print(f"Debug - Setting regenerate_title flag (event counter: {st.session_state['event_counter']})")
+            st.session_state["regenerate_title"] = True
+        
         # Generate a new event after the choice
         with st.spinner("Generating next event..."):
             st.session_state["current_event"] = event_service.generate_event(
@@ -214,6 +271,10 @@ def handle_event_choice(choice_index):
                 st.session_state["previous_events"]
             )
         
+        # Ensure we have a valid story title
+        if "story_title" not in st.session_state or not st.session_state["story_title"]:
+            st.session_state["story_title"] = f"{st.session_state['pet_name']}'s Great Adventure"
+        
         # Save the updated state
         pet_data = {
             "pet_name": st.session_state["pet_name"],
@@ -221,7 +282,11 @@ def handle_event_choice(choice_index):
             "pet_state": st.session_state["pet_state"],
             "setup_complete": st.session_state["setup_complete"],
             "current_event": st.session_state["current_event"],
-            "previous_events": st.session_state["previous_events"]
+            "previous_events": st.session_state["previous_events"],
+            "story_title": st.session_state["story_title"],
+            "event_counter": st.session_state["event_counter"],
+            "regenerate_title": st.session_state.get("regenerate_title", False),
+            "young_reader_mode": st.session_state.get("young_reader_mode", False)
         }
         pet_service.save_pet_data(pet_data, st.session_state["session_id"])
         
@@ -254,7 +319,40 @@ def main():
     
     # Dynamic title based on setup status
     if st.session_state["setup_complete"]:
-        st.title(f"🐾 {st.session_state['pet_name']}'s Great Adventure")
+        # Generate a dynamic title for the pet's adventure
+        print(f"Debug - setup_complete: {st.session_state['setup_complete']}")
+        print(f"Debug - story_title in session: {'story_title' in st.session_state}")
+        print(f"Debug - current story_title: {st.session_state.get('story_title', 'Not set')}")
+        
+        # Always generate a title if it doesn't exist or regeneration is requested
+        if "story_title" not in st.session_state or not st.session_state.get("story_title") or st.session_state.get("regenerate_title", False):
+            print(f"Debug - Generating new title for {st.session_state['pet_name']} the {st.session_state['pet_type']}")
+            
+            # Generate a title for the pet's adventure
+            story_title = event_service.generate_story_title(
+                pet_name=st.session_state["pet_name"],
+                pet_type=st.session_state["pet_type"],
+                current_event=st.session_state.get("current_event")
+            )
+            
+            print(f"Debug - Generated title: {story_title}")
+            
+            # Store the title in session state
+            st.session_state["story_title"] = story_title
+            
+            # Reset the regenerate_title flag
+            st.session_state["regenerate_title"] = False
+            
+            # Save the updated title to pet data
+            pet_data = pet_service.load_pet_data(st.session_state["session_id"]) or {}
+            pet_data["story_title"] = story_title
+            pet_service.save_pet_data(pet_data, st.session_state["session_id"])
+            print(f"Debug - Saved title to pet data: {story_title}")
+        
+        # Display the title - use a default if somehow still not set
+        title_to_display = st.session_state.get("story_title", f"{st.session_state['pet_name']}'s Great Adventure")
+        print(f"Debug - Displaying title: {title_to_display}")
+        st.title(f"🐾 {title_to_display}")
     else:
         st.title("🐾 Virtual Pet Simulator")
     
@@ -310,6 +408,23 @@ def main():
             
             # Pet description
             st.write("Your pet will need your care and attention. Make sure to feed it, play with it, and let it rest!")
+            
+            # Young Reader Mode toggle
+            st.write("---")
+            st.subheader("Reading Level")
+            col_a, col_b = st.columns([1, 2])
+            with col_a:
+                st.toggle(
+                    "Young Reader Mode",
+                    key="young_reader_mode_checkbox",
+                    help="Simplifies text for young readers (ages 4-6)",
+                    value=st.session_state.get("young_reader_mode", False)
+                )
+            with col_b:
+                if st.session_state.get("young_reader_mode_checkbox", False):
+                    st.markdown("✅ **Simple words and shorter stories for young readers!**")
+                else:
+                    st.markdown("📚 **Standard reading level**")
         
         # Start button
         st.button("Start Your Pet Adventure!", on_click=complete_setup)

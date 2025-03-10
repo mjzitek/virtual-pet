@@ -17,6 +17,7 @@ from app.config.settings import (
     CRITICAL_STAT_THRESHOLD
 )
 from app.data.story_starters import STORY_STARTERS
+import streamlit as st
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ class EventService:
         """
         if not self.is_llm_available():
             logger.warning("LLM Service not available, cannot generate story")
-            return None
+            return self._generate_fallback_story(pet_name)
         
         try:
             # Select a random story starter
@@ -97,24 +98,61 @@ class EventService:
             location = story_starter["location"]
             scenario = story_starter["scenario"]
             
-            # This is a placeholder - you'll implement the specific prompts later
-            system_prompt = "You are an AI assistant that generates stories for a virtual pet application."
-            user_prompt = f"""Generate a base story for a {pet_type} named {pet_name}.
-
-            STORY STARTER:
-            Location: {location}
-            Scenario: {scenario}
-
-            Using the story starter above, generate a story that is 2-3 paragraphs long. Make it fun and engaging.
+            # Check if young reader mode is enabled
+            young_reader_mode = st.session_state.get("young_reader_mode", False)
             
-            Create an engaging scenario with 2 options for the user to choose from. Use JSON format.
+            # Adjust the system prompt based on reading level
+            if young_reader_mode:
+                system_prompt = """You are an AI assistant that generates stories for young children (ages 4-6) in a virtual pet application.
+                Your stories should:
+                - Use simple vocabulary appropriate for young readers
+                - Have short sentences (5-8 words per sentence)
+                - Be brief (2-3 very short paragraphs)
+                - Include repetition and simple sentence structures
+                - Focus on concrete concepts rather than abstract ones
+                - Use sound words that children enjoy (like "splash", "zoom", "meow")
+                - Be fun, engaging, and easy to understand
+                """
+            else:
+                system_prompt = "You are an AI assistant that generates stories for a virtual pet application."
+            
+            # Adjust the user prompt based on reading level
+            if young_reader_mode:
+                user_prompt = f"""Generate a simple story for young children (ages 4-6) about a {pet_type} named {pet_name}.
 
-            Set stats to following:
-            - Hunger: 8/10
-            - Energy: 8/10
-            - Happiness: 8/10
-            - Current mood: happy
-            """
+                STORY STARTER:
+                Place: {location}
+                What happens: {scenario}
+
+                Make a very short story (2-3 small paragraphs) with simple words. 
+                Use short sentences that are easy for young children to understand.
+                Include fun sounds like "meow", "woof", or "splash".
+                
+                Create 2 very simple choices for the child to pick from. Use JSON format.
+
+                Set stats to following:
+                - Hunger: 8/10
+                - Energy: 8/10
+                - Happiness: 8/10
+                - Current mood: happy
+                """
+            else:
+                user_prompt = f"""Generate a base story for a {pet_type} named {pet_name}.
+
+                STORY STARTER:
+                Location: {location}
+                Scenario: {scenario}
+
+                Using the story starter above, generate a story that is 2-3 paragraphs long. Make it fun and engaging.
+                
+                Create an engaging scenario with 2 options for the user to choose from. Use JSON format.
+
+                Set stats to following:
+                - Hunger: 8/10
+                - Energy: 8/10
+                - Happiness: 8/10
+                - Current mood: happy
+                """
             print(user_prompt)
             
             event_data = self.llm_service.generate_structured_output(
@@ -144,7 +182,139 @@ class EventService:
             return event_data
         except Exception as e:
             logger.error(f"Failed to generate event: {str(e)}")
-            return None
+            return self._generate_fallback_story(pet_name)
+    
+    def generate_story_title(self, pet_name: str, pet_type: str, current_event: Optional[Dict[str, Any]] = None) -> str:
+        """
+        Generate a title for the pet's story.
+        
+        Args:
+            pet_name: The name of the pet
+            pet_type: The type of pet (e.g., "cat", "dog")
+            current_event: The current event data (optional)
+            
+        Returns:
+            A string containing the generated title
+        """
+        if not self.is_llm_available():
+            logger.warning("LLM Service not available, cannot generate story title")
+            return f"{pet_name}'s Great Adventure"
+        
+        try:
+            # Extract event description if available
+            event_description = ""
+            if current_event and "description" in current_event:
+                event_description = f"Current situation: {current_event['description']}"
+                print(f"Debug - Using event description: {event_description[:50]}...")
+            else:
+                print("Debug - No event description available")
+            
+            # Check if young reader mode is enabled
+            young_reader_mode = st.session_state.get("young_reader_mode", False)
+            
+            # Create the system prompt based on reading level
+            if young_reader_mode:
+                system_prompt = (
+                    "You are a creative title generator for a virtual pet game for young children (ages 4-6). "
+                    "Generate a very short, simple title for the pet's adventure. "
+                    "The title should be 2-4 words, include the pet's name, and be easy for young children to read. "
+                    "Use simple, familiar words that a 4-6 year old would understand."
+                )
+            else:
+                system_prompt = (
+                    "You are a creative title generator for a virtual pet game. "
+                    "Generate a short, catchy, and playful title for the pet's adventure. "
+                    "The title should be 3-7 words, incorporate the pet's name, and possibly include "
+                    "a pun or wordplay related to the type of pet. Make it fun and engaging!"
+                )
+            
+            # Create the user prompt based on reading level
+            if young_reader_mode:
+                user_prompt = (
+                    f"Create a simple title for {pet_name} the {pet_type}'s adventure. "
+                    f"The title must include the name '{pet_name}' and use very simple words. "
+                    f"{event_description} "
+                    f"Return output in JSON format."
+                )
+            else:
+                user_prompt = (
+                    f"Create a title for {pet_name} the {pet_type}'s adventure. "
+                    f"The title must include the name '{pet_name}' and should be fun and playful. "
+                    f"{event_description} "
+                    f"Return output in JSON format."
+                )
+            
+            print(f"Debug - User prompt: {user_prompt}")
+            
+            # Define a simple schema for the title
+            title_schema = {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "A short, catchy title for the pet's adventure"
+                    }
+                },
+                "required": ["title"]
+            }
+            
+            # Generate the title
+            print("Debug - Calling LLM service to generate title")
+            response = self.llm_service.generate_structured_output(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_schema=title_schema,
+                temperature=0.8  # Slightly higher temperature for creativity
+            )
+            
+            # Extract the title from the response
+            if response and "title" in response and response["title"]:
+                title = response["title"].strip()
+                # Ensure the pet's name is in the title
+                if pet_name not in title:
+                    title = f"{pet_name}'s {title}"
+                print(f"Debug - Generated title: {title}")
+                return title
+            else:
+                print(f"Debug - Invalid response from LLM, using default title")
+                return f"{pet_name}'s Great Adventure"
+                
+        except Exception as e:
+            logger.error(f"Failed to generate story title: {str(e)}")
+            print(f"Debug - Error generating title: {str(e)}")
+            return f"{pet_name}'s Great Adventure"
+    
+    def _generate_fallback_story(self, pet_name: str) -> Dict[str, Any]:
+        """
+        Generate a fallback story when the LLM service is not available.
+        
+        Args:
+            pet_name: The name of the pet
+            
+        Returns:
+            A dictionary with a basic story structure
+        """
+        logger.info("Generating fallback story")
+        
+        # Create a simple fallback story
+        return {
+            "title": f"{pet_name}'s Day Out",
+            "description": f"{pet_name} is having a lovely day exploring the neighborhood. The sun is shining and there's a gentle breeze in the air.",
+            "options": [
+                {
+                    "text": "Go to the park",
+                    "effect": {"happiness": 1, "energy": -1, "hunger": -1}
+                },
+                {
+                    "text": "Take a nap",
+                    "effect": {"energy": 2, "happiness": -1, "hunger": 0}
+                },
+                {
+                    "text": "Look for food",
+                    "effect": {"hunger": 2, "energy": -1, "happiness": 0}
+                }
+            ]
+        }
     
     def generate_summary(self, previous_events: List[str]) -> str:
         """
@@ -272,36 +442,104 @@ class EventService:
                             
                         previous_events_context += f"{i+1}. {formatted_event}\n"
             
-            # This is a placeholder - you'll implement the specific prompts later
-            system_prompt = "You are an AI assistant that generates events for a virtual pet application."
-            user_prompt = f"""
-            Generate an event for a {pet_type} named {pet_name} with the following state:
-            - Hunger: {pet_state['hunger']}/10
-            - Energy: {pet_state['energy']}/10
-            - Happiness: {pet_state['happiness']}/10
-            - Current mood: {pet_state['mood']}
+            # Check if young reader mode is enabled
+            young_reader_mode = st.session_state.get("young_reader_mode", False)
             
-            INSTRUCTIONS:
-            - Create an engaging scenario with 2 options for the user to choose from.
-            - Make the story fun and engaging.
-            - Look at the previous events and make the next event is relevant to the previous events and the story overall.
-            - Pay attention to the pet's stats and make sure the next choices reflect this.  
-                - If any are too low you might have to force choices that will help them.  For example if energy is too low (1) you might have to force a rest choice.  You cannot allow the stats to go below 0.
-                - You can do something like take a short nap to gain a little energy or take a longer nap to gain more energy.
-            - Analyze your story and choices and make sure they make sense based on previous instructions.
-
-            Response in JSON format.
-            """
+            # Adjust the system prompt based on reading level
+            if young_reader_mode:
+                system_prompt = """You are an AI assistant that generates stories for young children (ages 4-6) in a virtual pet application.
+                Your stories should:
+                - Use simple vocabulary appropriate for young readers
+                - Have short sentences (5-8 words per sentence)
+                - Be brief (2-3 very short paragraphs)
+                - Include repetition and simple sentence structures
+                - Focus on concrete concepts rather than abstract ones
+                - Use sound words that children enjoy (like "splash", "zoom", "meow")
+                - Be fun, engaging, and easy to understand
+                """
+            else:
+                system_prompt = "You are an AI assistant that generates events for a virtual pet application."
             
-            # Add previous events context if available
-            if previous_events_context:
-                user_prompt += f"""
-            ---
-            <previous_events>
-            {previous_events_context}
-            </previous_events>
-            ---
-            """
+            # Adjust the user prompt based on reading level
+            if young_reader_mode:
+                user_prompt = f"""
+                Generate a simple story for young children (ages 4-6) about a {pet_type} named {pet_name}.
+                
+                Pet's current state:
+                - Hunger: {pet_state['hunger']}/10
+                - Energy: {pet_state['energy']}/10
+                - Happiness: {pet_state['happiness']}/10
+                
+                {previous_events_context}
+                
+                - Make a very short story (2-3 small paragraphs) with simple words. 
+                - Use short sentences that are easy for young children to understand.
+                - Include fun sounds like "meow", "woof", or "splash".
+                - Don't repeat the same words constantly.  Avoid repeating words like 'happy, happy, happy'.
+                
+                Create 2 very simple choices for the child to pick from.
+                
+                Return your response in this JSON format:
+                {{
+                    "title": "A short, fun title",
+                    "description": "The story text here",
+                    "image_prompt": "A short description for generating an image",
+                    "options": [
+                        {{
+                            "text": "First choice (simple words)",
+                            "effect": {{
+                                "hunger": 0,
+                                "energy": 0,
+                                "happiness": 0
+                            }}
+                        }},
+                        {{
+                            "text": "Second choice (simple words)",
+                            "effect": {{
+                                "hunger": 0,
+                                "energy": 0,
+                                "happiness": 0
+                            }}
+                        }}
+                    ]
+                }}
+                """
+            else:
+                user_prompt = f"""
+                Generate an event for a {pet_type} named {pet_name} with the following state:
+                - Hunger: {pet_state['hunger']}/10
+                - Energy: {pet_state['energy']}/10
+                - Happiness: {pet_state['happiness']}/10
+                
+                {previous_events_context}
+                
+                Create an engaging scenario with 2 options for the user to choose from.
+                
+                Return your response in this JSON format:
+                {{
+                    "title": "A descriptive title for the event",
+                    "description": "A detailed description of the event (2-3 paragraphs)",
+                    "image_prompt": "A detailed description for generating an image of this event",
+                    "options": [
+                        {{
+                            "text": "First option description",
+                            "effect": {{
+                                "hunger": 0,
+                                "energy": 0,
+                                "happiness": 0
+                            }}
+                        }},
+                        {{
+                            "text": "Second option description",
+                            "effect": {{
+                                "hunger": 0,
+                                "energy": 0,
+                                "happiness": 0
+                            }}
+                        }}
+                    ]
+                }}
+                """
 
             print(user_prompt)
             
@@ -376,7 +614,7 @@ class EventService:
             pet_description = f"""A vibrant, energetic, and whimsical illustration of a cartoonish orange cat with a {pet_state} expression. 
             The cat has a fluffy fur coat, with individual strands sticking out playfully. 
             Its fur is a mix of warm orange and yellow hues, with subtle shading and highlights adding depth and texture. 
-            The cat’s face is highly expressive, with oversized, gleaming blue eyes that are wide open, exuding joy and excitement. 
+            The cat's face is highly expressive, with oversized, gleaming blue eyes that are wide open, exuding joy and excitement. 
             The whiskers are long and slightly curved, giving a sense of movement and liveliness."""
         elif pet_type.lower() == "dog":
             pet_description = f"a playful, friendly dog with a wagging tail and a {pet_state} expression"
@@ -407,4 +645,4 @@ class EventService:
         except Exception as e:
             logger.error(f"Error generating image: {str(e)}")
             return None
-        
+    
