@@ -84,6 +84,13 @@ def complete_setup():
         
         st.session_state["setup_complete"] = True
         
+        # Generate an initial story for the pet
+        st.session_state["current_event"] = event_service.generate_story(
+            st.session_state["pet_state"],
+            st.session_state["pet_type"],
+            st.session_state["pet_name"]
+        )
+        
         # Save the data after setup is complete
         pet_data = {
             "pet_name": st.session_state["pet_name"],
@@ -108,8 +115,7 @@ def update_pet_state(action):
         action
     )
     
-    # Always generate an event after an action (for testing purposes)
-    # In a production environment, you might want to use the random chance logic instead
+    # Always generate a new event after an action
     st.session_state["current_event"] = event_service.generate_event(
         st.session_state["pet_state"],
         st.session_state["pet_type"],
@@ -147,8 +153,12 @@ def handle_event_choice(choice_index):
             effects
         )
         
-        # Clear the current event
-        st.session_state["current_event"] = None
+        # Generate a new event after the choice
+        st.session_state["current_event"] = event_service.generate_event(
+            st.session_state["pet_state"],
+            st.session_state["pet_type"],
+            st.session_state["pet_name"]
+        )
         
         # Save the updated state
         pet_data = {
@@ -164,16 +174,22 @@ def handle_event_choice(choice_index):
 def reset_pet():
     """Reset the pet by deleting saved data and clearing session state."""
     pet_service.reset_pet_data()
-    for key in ["setup_complete", "pet_name", "pet_type", "pet_state", "current_event"]:
-        if key in st.session_state:
-            del st.session_state[key]
-    st.rerun()
+    # Set a flag to indicate that we want to reset
+    st.session_state["reset_requested"] = True
 
 # Main application UI
 def main():
     """Main application function."""
     # Print a message to indicate this file is being run
     print("Running app/main.py - Virtual Pet Application with Event System")
+    
+    # Check if reset was requested
+    if st.session_state.get("reset_requested", False):
+        # Clear the session state
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        # Use rerun outside of a callback
+        st.rerun()
     
     # Initialize session state
     initialize_session_state()

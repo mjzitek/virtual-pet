@@ -82,6 +82,45 @@ class EventService:
         print(f"Should trigger: {should_trigger}")
         return should_trigger
     
+    def generate_story(self, pet_state: Dict[str, Any], pet_type: str, pet_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Generate a story based on the current pet state.
+        """
+        if not self.is_llm_available():
+            logger.warning("LLM Service not available, cannot generate story")
+            return None
+        
+        try:
+            # This is a placeholder - you'll implement the specific prompts later
+            system_prompt = "You are an AI assistant that generates stories for a virtual pet application."
+            user_prompt = f"""Generate a base story for a {pet_type} named {pet_name}.s
+
+            Generate a story that is 2-3 paragraphs long.  Make it fun and engaging.
+            
+            Create an engaging scenario with 2 options for the user to choose from.  Use JSON format.
+
+            Set stats to following:
+            - Hunger: 8/10
+            - Energy: 8/10
+            - Happiness: 8/10
+            - Current mood: happys
+            """
+            print(user_prompt)
+            
+            event_data = self.llm_service.generate_structured_output(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                response_schema=PET_EVENT_SCHEMA
+            )
+            
+            print(event_data)
+
+            logger.info(f"Generated event: {event_data.get('title', 'Unknown event')}")
+            return event_data
+        except Exception as e:
+            logger.error(f"Failed to generate event: {str(e)}")
+            return None
+    
     def generate_event(self, pet_state: Dict[str, Any], pet_type: str, pet_name: str) -> Optional[Dict[str, Any]]:
         """
         Generate an event based on the current pet state.
@@ -108,7 +147,7 @@ class EventService:
             - Happiness: {pet_state['happiness']}/10
             - Current mood: {pet_state['mood']}
             
-            Create an engaging scenario with 2-4 options for the user to choose from.
+            Create an engaging scenario with 2 options for the user to choose from.
 
             Response in JSON format.
             """
