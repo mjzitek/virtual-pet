@@ -65,3 +65,4 @@ app/data/pet_data.json
 
 docs/
 app/data/pet_data_*.json
+app/static/audio/generated/*

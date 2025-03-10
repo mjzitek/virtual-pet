@@ -98,6 +98,10 @@ class EventService:
             location = story_starter["location"]
             scenario = story_starter["scenario"]
             
+            # Store the location in session state for consistent image generation
+            st.session_state["story_location"] = location
+            print(f"Debug - Setting story location: {location}")
+            
             # Check if young reader mode is enabled
             young_reader_mode = st.session_state.get("young_reader_mode", False)
             
@@ -416,6 +420,9 @@ class EventService:
             return None
         
         try:
+            # Get the base storyline from session state
+            base_storyline = st.session_state.get("base_storyline", "")
+            
             # Format the previous events context
             previous_events_context = ""
             if previous_events and len(previous_events) > 0:
@@ -426,8 +433,8 @@ class EventService:
                     previous_events_context = f"Summary of previous events:\n{summary}"
                 else:
                     # Otherwise, include the full events
-                    previous_events_context = "\n"
-                    for i, event in enumerate(previous_events):
+                    previous_events_context = "Previous events:\n"
+                    for i, event in enumerate(previous_events[-5:]):  # Only use the last 5 events for context
                         # For the prompt, we need to format the event to a reasonable length
                         # Extract the key components
                         formatted_event = event
@@ -470,16 +477,30 @@ class EventService:
                 - Energy: {pet_state['energy']}/10
                 - Happiness: {pet_state['happiness']}/10
                 
+                Original story beginning:
+                {base_storyline}
+                
+                <previous_events>
                 {previous_events_context}
+                </previous_events>
                 
-                - Make a very short story (2-3 small paragraphs) with simple words. 
-                - Use short sentences that are easy for young children to understand.
+                ### **INSTRUCTIONS:**
+                - Write a short story (2-3 paragraphs) using simple words.
+                - Keep sentences short and engaging for young children.
                 - Include fun sounds like "meow", "woof", or "splash".
-                - Don't repeat the same words constantly.  Avoid repeating words like 'happy, happy, happy'.
+                - Avoid repeating the same words too often.
+                - Ensure **each new event follows logically from the previous one**.
+                - Maintain consistency in **location and actions** (e.g., if Pete is on a rooftop, he can’t suddenly be in a park unless the transition is explained).
+                - Take into account Pete’s **current state** (e.g., if Pete is hungry, make food choices relevant).
+                - **Transitions must make sense**: Each new event should acknowledge the previous action before moving forward.
+
+                ### **IMPORTANT:**
+                - **Create 2 simple choices** for the child.
+                - **Choices must be unique and advance the story differently**.
+                - **Ensure location, past events, and actions align naturally**.
+                - **Avoid jarring scene shifts** (e.g., Pete should not suddenly chase a frog on a rooftop unless there’s a reason for the frog being there).
                 
-                Create 2 very simple choices for the child to pick from.
-                
-                Return your response in this JSON format:
+                ### **Return the response in this JSON format:**
                 {{
                     "title": "A short, fun title",
                     "description": "The story text here",
@@ -511,9 +532,19 @@ class EventService:
                 - Energy: {pet_state['energy']}/10
                 - Happiness: {pet_state['happiness']}/10
                 
-                {previous_events_context}
+                Original story beginning:
+                {base_storyline}
                 
-                Create an engaging scenario with 2 options for the user to choose from.
+                <previous_events>
+                {previous_events_context}
+                </previous_events>
+                
+                INSTRUCTIONS:
+                - Make sure the story stays consistent with the previous events but make each event different to keep the story progressing.
+                
+                IMPORTANT:
+                - Create 2 choices for the reader to pick from.
+                - Make sure the choices are different from the previous events.
                 
                 Return your response in this JSON format:
                 {{
@@ -608,6 +639,9 @@ class EventService:
             logger.warning("LLM Service not available, cannot generate image")
             return None
         
+        # Get the story location from session state
+        story_location = st.session_state.get("story_location", "")
+        
         # Customize the image description based on pet type
         pet_description = ""
         if pet_type.lower() == "cat":
@@ -619,23 +653,18 @@ class EventService:
         elif pet_type.lower() == "dog":
             pet_description = f"a playful, friendly dog with a wagging tail and a {pet_state} expression"
         elif pet_type.lower() == "rabbit":
-            pet_description = f"a small, furry rabbit with long ears and a {pet_state} expression"
+            pet_description = f"a cute, fluffy rabbit with long ears and a {pet_state} expression"
         else:
-            pet_description = f"a cute, animated {pet_type} with a {pet_state} expression"
+            pet_description = f"a cute, cartoon-style {pet_type} with a {pet_state} expression"
         
-        prompt = f"""Generate an image of {pet_name} the {pet_type} based on the following story.
-
-        BASE IMAGE DESCRIPTION:
-        {pet_description}s
-
-        The scene should be colorful and engaging, with a light background that enhances the brightness of the overall image.
-        The pet should be the main focus of the image, with its body language and facial expression conveying its current mood.
-        The overall image should be fun and whimsical.  The pet should be cute and adorable.
-
-        STORY CONTEXT:
-        {event_description}
+        # Create a prompt for the image generation
+        location_context = f" in {story_location}" if story_location else ""
+        prompt = f"""
+        Create a vibrant, colorful, child-friendly illustration of {pet_description} named {pet_name}{location_context}.
         
-        Make sure the image reflects the story context and the pet's current mood ({pet_state}).
+        Scene context: {event_description}
+        
+        Style: Digital illustration, vibrant colors, cute cartoon style, suitable for children's book
         """
 
         try:
