@@ -1,0 +1,12 @@
+{
+  "cat": {
+    "name": "Cat",
+    "images": {
+      "happy": "app/static/images/cat_happy.png",
+      "sad": "app/static/images/cat_sad.png",
+      "hungry": "app/static/images/cat_hungry.png",
+      "tired": "app/static/images/cat_tired.png",
+      "neutral": "app/static/images/cat_neutral.png"
+    }
+  }
+} 
