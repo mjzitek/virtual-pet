@@ -9,6 +9,7 @@ import os
 import json
 import logging
 import datetime
+import uuid
 from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
 
@@ -31,6 +32,19 @@ class PetService:
         
         self.pet_config = self._load_pet_config()
         logger.info("Pet Service initialized")
+    
+    def _get_session_data_file(self, session_id: str) -> str:
+        """
+        Get the data file path for a specific session.
+        
+        Args:
+            session_id: The session ID
+            
+        Returns:
+            The path to the session-specific data file
+        """
+        data_dir = os.path.dirname(PET_DATA_FILE)
+        return os.path.join(data_dir, f"pet_data_{session_id}.json")
     
     def _load_pet_config(self) -> Dict[str, Any]:
         """
@@ -103,31 +117,47 @@ class PetService:
         
         return pet_data["images"][mood]
     
-    def load_pet_data(self) -> Optional[Dict[str, Any]]:
+    def load_pet_data(self, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Load saved pet data from the data file.
         
+        Args:
+            session_id: The session ID to load data for. If None, uses the global data file.
+            
         Returns:
             The loaded pet data, or None if no data exists
         """
-        data = load_json_file(PET_DATA_FILE)
+        if session_id:
+            data_file = self._get_session_data_file(session_id)
+            data = load_json_file(data_file)
+        else:
+            # Fallback to global file for backward compatibility
+            data = load_json_file(PET_DATA_FILE)
+            
         if data is None:
             logger.info("No saved pet data found. Starting with a new pet.")
         return data
     
-    def save_pet_data(self, pet_data: Dict[str, Any]) -> bool:
+    def save_pet_data(self, pet_data: Dict[str, Any], session_id: Optional[str] = None) -> bool:
         """
         Save pet data to the data file.
         
         Args:
             pet_data: The pet data to save
+            session_id: The session ID to save data for. If None, uses the global data file.
             
         Returns:
             True if saving was successful, False otherwise
         """
         # Add a timestamp
         pet_data["last_updated"] = datetime.datetime.now().isoformat()
-        return save_json_file(PET_DATA_FILE, pet_data)
+        
+        if session_id:
+            data_file = self._get_session_data_file(session_id)
+            return save_json_file(data_file, pet_data)
+        else:
+            # Fallback to global file for backward compatibility
+            return save_json_file(PET_DATA_FILE, pet_data)
     
     def update_pet_state(self, pet_state: Dict[str, Any], action: str) -> Dict[str, Any]:
         """
@@ -202,16 +232,25 @@ class PetService:
         else:
             return "happy"
     
-    def reset_pet_data(self) -> bool:
+    def reset_pet_data(self, session_id: Optional[str] = None) -> bool:
         """
         Reset pet data by deleting the data file.
         
+        Args:
+            session_id: The session ID to reset data for. If None, uses the global data file.
+            
         Returns:
             True if reset was successful, False otherwise
         """
         try:
-            if os.path.exists(PET_DATA_FILE):
-                os.remove(PET_DATA_FILE)
+            if session_id:
+                data_file = self._get_session_data_file(session_id)
+                if os.path.exists(data_file):
+                    os.remove(data_file)
+            else:
+                # Fallback to global file for backward compatibility
+                if os.path.exists(PET_DATA_FILE):
+                    os.remove(PET_DATA_FILE)
             return True
         except Exception as e:
             logger.error(f"Failed to reset pet data: {str(e)}")

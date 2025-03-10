@@ -64,3 +64,4 @@ app/data/pet_data.json
 .cursor/rules/
 
 docs/
+app/data/pet_data_*.json

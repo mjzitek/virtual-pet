@@ -10,6 +10,7 @@ import logging
 import streamlit as st
 from typing import Dict, Any, Optional
 import sys
+import uuid
 
 # Add the parent directory to the Python path to allow imports from the app package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -30,8 +31,13 @@ event_service = EventService()
 # Initialize session state
 def initialize_session_state():
     """Initialize or restore session state."""
-    # Check if we have saved pet data
-    saved_data = pet_service.load_pet_data()
+    # Generate a session ID if one doesn't exist
+    if "session_id" not in st.session_state:
+        st.session_state["session_id"] = str(uuid.uuid4())
+        logger.info(f"Generated new session ID: {st.session_state['session_id']}")
+    
+    # Check if we have saved pet data for this session
+    saved_data = pet_service.load_pet_data(st.session_state["session_id"])
     
     if saved_data:
         # Restore from saved data
@@ -111,7 +117,7 @@ def complete_setup():
             "current_event": st.session_state["current_event"],
             "previous_events": st.session_state["previous_events"]
         }
-        pet_service.save_pet_data(pet_data)
+        pet_service.save_pet_data(pet_data, st.session_state["session_id"])
         
         # Force a rerun to update the UI with the initial story
         st.rerun()
@@ -159,7 +165,7 @@ def update_pet_state(action):
         "current_event": st.session_state["current_event"],
         "previous_events": st.session_state["previous_events"]
     }
-    pet_service.save_pet_data(pet_data)
+    pet_service.save_pet_data(pet_data, st.session_state["session_id"])
     
     # Force a rerun to update the UI with the new event
     st.rerun()
@@ -217,7 +223,7 @@ def handle_event_choice(choice_index):
             "current_event": st.session_state["current_event"],
             "previous_events": st.session_state["previous_events"]
         }
-        pet_service.save_pet_data(pet_data)
+        pet_service.save_pet_data(pet_data, st.session_state["session_id"])
         
         # Force a rerun to update the UI with the new event
         st.rerun()
@@ -225,7 +231,7 @@ def handle_event_choice(choice_index):
 # Function to reset pet
 def reset_pet():
     """Reset the pet by deleting saved data and clearing session state."""
-    pet_service.reset_pet_data()
+    pet_service.reset_pet_data(st.session_state.get("session_id"))
     # Set a flag to indicate that we want to reset
     st.session_state["reset_requested"] = True
 
