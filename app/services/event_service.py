@@ -402,15 +402,19 @@ class EventService:
             # Provide a more useful fallback summary
             return f"The pet has experienced various events including {', '.join([e.split(' - ')[0] for e in previous_events[-5:]])}."
     
-    def generate_event(self, pet_state: Dict[str, Any], pet_type: str, pet_name: str, previous_events: List[str] = None) -> Optional[Dict[str, Any]]:
+    def generate_event(self, pet_state: Dict[str, Any], pet_type: str, pet_name: str, 
+                      previous_events: List[str] = None, event_summaries: List[str] = None,
+                      action: str = None) -> Optional[Dict[str, Any]]:
         """
-        Generate an event based on the current pet state.
+        Generate a random event based on the pet's state.
         
         Args:
             pet_state: The current state of the pet
             pet_type: The type of pet (e.g., "cat", "dog")
             pet_name: The name of the pet
             previous_events: List of previous events/actions to provide context
+            event_summaries: List of summaries of previous event batches
+            action: The action that triggered this event, if any
             
         Returns:
             A dictionary containing the event data, or None if generation fails
@@ -426,28 +430,32 @@ class EventService:
             # Format the previous events context
             previous_events_context = ""
             if previous_events and len(previous_events) > 0:
-                # If we have too many events, generate a summary
-                if len(previous_events) > 10:
-                    logger.info(f"Generating summary for {len(previous_events)} events")
-                    summary = self.generate_summary(previous_events)
-                    previous_events_context = f"Summary of previous events:\n{summary}"
-                else:
-                    # Otherwise, include the full events
+                # If we have summaries, include them first
+                if event_summaries and len(event_summaries) > 0:
+                    previous_events_context = "Historical event summaries:\n"
+                    for i, summary in enumerate(event_summaries):
+                        previous_events_context += f"Summary {i+1}: {summary}\n\n"
+                    
+                    previous_events_context += "\nRecent events:\n"
+                
+                # Include the most recent events
+                if not previous_events_context:
                     previous_events_context = "Previous events:\n"
-                    for i, event in enumerate(previous_events[-5:]):  # Only use the last 5 events for context
-                        # For the prompt, we need to format the event to a reasonable length
-                        # Extract the key components
-                        formatted_event = event
-                        if "Description: " in event and " - Chose: " in event:
-                            # Split into parts
-                            title_part = event.split(" - Description: ")[0]
-                            description_part = event.split(" - Description: ")[1].split(" - Chose: ")[0]
-                            choice_part = "Chose: " + event.split(" - Chose: ")[1]
-                                
-                            # Reassemble with truncated description
-                            formatted_event = f"{title_part} - Description: {description_part} - {choice_part}"
+                    
+                for i, event in enumerate(previous_events[-10:]):  # Use the last 10 events for context
+                    # For the prompt, we need to format the event to a reasonable length
+                    # Extract the key components
+                    formatted_event = event
+                    if "Description: " in event and " - Chose: " in event:
+                        # Split into parts
+                        title_part = event.split(" - Description: ")[0]
+                        description_part = event.split(" - Description: ")[1].split(" - Chose: ")[0]
+                        choice_part = "Chose: " + event.split(" - Chose: ")[1]
                             
-                        previous_events_context += f"{i+1}. {formatted_event}\n"
+                        # Reassemble with truncated description
+                        formatted_event = f"{title_part} - Description: {description_part} - {choice_part}"
+                        
+                    previous_events_context += f"{i+1}. {formatted_event}\n"
             
             # Check if young reader mode is enabled
             young_reader_mode = st.session_state.get("young_reader_mode", False)
@@ -490,15 +498,16 @@ class EventService:
                 - Include fun sounds like "meow", "woof", or "splash".
                 - Avoid repeating the same words too often.
                 - Ensure **each new event follows logically from the previous one**.
-                - Maintain consistency in **location and actions** (e.g., if Pete is on a rooftop, he can’t suddenly be in a park unless the transition is explained).
-                - Take into account Pete’s **current state** (e.g., if Pete is hungry, make food choices relevant).
+                - Maintain consistency in **location and actions** (e.g., if {pet_name} is on a rooftop, he can't suddenly be in a park unless the transition is explained).
+                - Take into account {pet_name}'s **current state** (e.g., if {pet_name} is hungry, make food choices relevant).
                 - **Transitions must make sense**: Each new event should acknowledge the previous action before moving forward.
-
+                - If historical summaries are provided, maintain consistency with the overall narrative arc.
+                
                 ### **IMPORTANT:**
                 - **Create 2 simple choices** for the child.
                 - **Choices must be unique and advance the story differently**.
                 - **Ensure location, past events, and actions align naturally**.
-                - **Avoid jarring scene shifts** (e.g., Pete should not suddenly chase a frog on a rooftop unless there’s a reason for the frog being there).
+                - **Avoid jarring scene shifts** (e.g., {pet_name} should not suddenly chase a frog on a rooftop unless there's a reason for the frog being there).
                 
                 ### **Return the response in this JSON format:**
                 {{
@@ -541,6 +550,10 @@ class EventService:
                 
                 INSTRUCTIONS:
                 - Make sure the story stays consistent with the previous events but make each event different to keep the story progressing.
+                - If historical summaries are provided, maintain consistency with the overall narrative arc.
+                - Ensure each new event follows logically from the previous ones.
+                - Maintain consistency in location and actions (e.g., if {pet_name} is in one location, don't suddenly change it without explanation).
+                - Take into account {pet_name}'s current state when creating the event and choices.
                 
                 IMPORTANT:
                 - Create 2 choices for the reader to pick from.

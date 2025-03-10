@@ -139,6 +139,7 @@ class TTSService:
             
             formatted_text = response.choices[0].message.content
             logger.info("Successfully formatted story text for speech")
+            print(formatted_text)
             return formatted_text
             
         except Exception as e:
@@ -247,6 +248,15 @@ class TTSService:
         Get the list of available voices.
         
         Returns:
-            A list of available voice options
+            A list of available voice names
         """
-        return AVAILABLE_VOICES 
+        return AVAILABLE_VOICES
+        
+    def get_audio_dir(self) -> str:
+        """
+        Get the path to the generated audio directory.
+        
+        Returns:
+            The path to the generated audio directory
+        """
+        return str(GENERATED_AUDIO_DIR) 
