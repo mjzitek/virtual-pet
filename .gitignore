@@ -1,0 +1,10 @@
+env/
+docs/
+
+.env
+
+.streamlit/secrets.toml
+
+
+.DS_Store
+.cursor/rules/
