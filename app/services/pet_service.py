@@ -10,6 +10,7 @@ import json
 import logging
 import datetime
 from typing import Dict, Any, Optional, Tuple
+from pathlib import Path
 
 from app.config.settings import PET_CONFIG_FILE, PET_DATA_FILE, DEFAULT_PET_STATS
 from app.utils.file_helpers import load_json_file, save_json_file
@@ -24,6 +25,10 @@ class PetService:
     
     def __init__(self):
         """Initialize the Pet Service."""
+        # Ensure data directory exists
+        data_dir = os.path.dirname(PET_DATA_FILE)
+        os.makedirs(data_dir, exist_ok=True)
+        
         self.pet_config = self._load_pet_config()
         logger.info("Pet Service initialized")
     
@@ -49,6 +54,27 @@ class PetService:
         """
         return {pet_key: pet_data["name"] for pet_key, pet_data in self.pet_config.items()}
     
+    def _get_pet_key(self, pet_type: str) -> Optional[str]:
+        """
+        Get the correct pet key in a case-insensitive way.
+        
+        Args:
+            pet_type: The type of pet (case-insensitive)
+            
+        Returns:
+            The correct pet key, or None if not found
+        """
+        if not pet_type:
+            return None
+        
+        pet_type_lower = pet_type.lower()
+        
+        for key in self.pet_config.keys():
+            if key.lower() == pet_type_lower:
+                return key
+        
+        return None
+
     def get_pet_image_path(self, pet_type: str, mood: str) -> str:
         """
         Get the image path for a pet with the specified type and mood.
@@ -60,14 +86,17 @@ class PetService:
         Returns:
             The path to the pet image
         """
-        if pet_type not in self.pet_config:
+        # Get the correct pet key
+        pet_key = self._get_pet_key(pet_type)
+        
+        if not pet_key:
             logger.error(f"Invalid pet type: {pet_type}")
             # Return a default image if available
             if "cat" in self.pet_config and "neutral" in self.pet_config["cat"]["images"]:
                 return self.pet_config["cat"]["images"]["neutral"]
             return ""
         
-        pet_data = self.pet_config[pet_type]
+        pet_data = self.pet_config[pet_key]
         if mood not in pet_data["images"]:
             logger.warning(f"Invalid mood {mood} for pet type {pet_type}, using neutral")
             mood = "neutral"
@@ -81,7 +110,10 @@ class PetService:
         Returns:
             The loaded pet data, or None if no data exists
         """
-        return load_json_file(PET_DATA_FILE)
+        data = load_json_file(PET_DATA_FILE)
+        if data is None:
+            logger.info("No saved pet data found. Starting with a new pet.")
+        return data
     
     def save_pet_data(self, pet_data: Dict[str, Any]) -> bool:
         """

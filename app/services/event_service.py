@@ -79,6 +79,7 @@ class EventService:
             # Set cooldown for next event
             self.event_cooldown = random.randint(EVENT_COOLDOWN_MIN, EVENT_COOLDOWN_MAX)
             
+        print(f"Should trigger: {should_trigger}")
         return should_trigger
     
     def generate_event(self, pet_state: Dict[str, Any], pet_type: str, pet_name: str) -> Optional[Dict[str, Any]]:
@@ -108,7 +109,11 @@ class EventService:
             - Current mood: {pet_state['mood']}
             
             Create an engaging scenario with 2-4 options for the user to choose from.
+
+            Response in JSON format.
             """
+
+            print(user_prompt)
             
             event_data = self.llm_service.generate_structured_output(
                 system_prompt=system_prompt,
@@ -116,6 +121,8 @@ class EventService:
                 response_schema=PET_EVENT_SCHEMA
             )
             
+            print(event_data)
+
             logger.info(f"Generated event: {event_data.get('title', 'Unknown event')}")
             return event_data
         except Exception as e:

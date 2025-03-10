@@ -26,7 +26,13 @@ def load_json_file(file_path: str) -> Optional[Dict[str, Any]]:
     try:
         with open(file_path, "r") as file:
             return json.load(file)
-    except (json.JSONDecodeError, FileNotFoundError) as e:
+    except FileNotFoundError:
+        logger.info(f"File not found: {file_path} - This is normal for first run")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON file {file_path}: {str(e)}")
+        return None
+    except Exception as e:
         logger.error(f"Failed to load JSON file {file_path}: {str(e)}")
         return None
 

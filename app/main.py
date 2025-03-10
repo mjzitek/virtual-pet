@@ -37,7 +37,19 @@ def initialize_session_state():
         # Restore from saved data
         for key, value in saved_data.items():
             if key != "last_updated":  # Skip the timestamp
-                st.session_state[key] = value
+                # Special handling for pet_type to ensure correct case
+                if key == "pet_type" and value:
+                    correct_pet_key = pet_service._get_pet_key(value)
+                    if correct_pet_key:
+                        st.session_state[key] = correct_pet_key
+                    else:
+                        st.session_state[key] = "cat"  # Default to cat if not found
+                else:
+                    st.session_state[key] = value
+        
+        # Ensure current_event is initialized even if not in saved data
+        if "current_event" not in st.session_state:
+            st.session_state["current_event"] = None
     else:
         # Default initialization
         if "setup_complete" not in st.session_state:
@@ -77,7 +89,8 @@ def complete_setup():
             "pet_name": st.session_state["pet_name"],
             "pet_type": st.session_state["pet_type"],
             "pet_state": st.session_state["pet_state"],
-            "setup_complete": st.session_state["setup_complete"]
+            "setup_complete": st.session_state["setup_complete"],
+            "current_event": st.session_state["current_event"]
         }
         pet_service.save_pet_data(pet_data)
 
@@ -100,17 +113,18 @@ def update_pet_state(action):
         "pet_name": st.session_state["pet_name"],
         "pet_type": st.session_state["pet_type"],
         "pet_state": st.session_state["pet_state"],
-        "setup_complete": st.session_state["setup_complete"]
+        "setup_complete": st.session_state["setup_complete"],
+        "current_event": st.session_state["current_event"]
     }
     pet_service.save_pet_data(pet_data)
     
     # Check if an event should be triggered
-    if event_service.should_trigger_event(st.session_state["pet_state"]):
-        st.session_state["current_event"] = event_service.generate_event(
-            st.session_state["pet_state"],
-            st.session_state["pet_type"],
-            st.session_state["pet_name"]
-        )
+    #if event_service.should_trigger_event(st.session_state["pet_state"]):
+    st.session_state["current_event"] = event_service.generate_event(
+        st.session_state["pet_state"],
+        st.session_state["pet_type"],
+        st.session_state["pet_name"]
+    )
 
 # Function to handle event choice
 def handle_event_choice(choice_index):
@@ -141,7 +155,8 @@ def handle_event_choice(choice_index):
             "pet_name": st.session_state["pet_name"],
             "pet_type": st.session_state["pet_type"],
             "pet_state": st.session_state["pet_state"],
-            "setup_complete": st.session_state["setup_complete"]
+            "setup_complete": st.session_state["setup_complete"],
+            "current_event": st.session_state["current_event"]
         }
         pet_service.save_pet_data(pet_data)
 
@@ -221,7 +236,7 @@ def main():
     # Main pet interface (only shown after setup is complete)
     else:
         # Check if there's an active event
-        if st.session_state["current_event"]:
+        if "current_event" in st.session_state and st.session_state["current_event"]:
             # Display the event
             event = st.session_state["current_event"]
             st.header(event["title"])
