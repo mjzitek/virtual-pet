@@ -116,6 +116,21 @@ class EventService:
             print(event_data)
 
             logger.info(f"Generated event: {event_data.get('title', 'Unknown event')}")
+            
+            # Generate an image for the event
+            if event_data and "description" in event_data:
+                try:
+                    image_url = self.generate_image(
+                        pet_type=pet_type,
+                        pet_name=pet_name,
+                        pet_state=pet_state.get("mood", "happy"),
+                        event_description=event_data["description"]
+                    )
+                    if image_url:
+                        event_data["image_url"] = image_url
+                except Exception as e:
+                    logger.error(f"Failed to generate image for event: {str(e)}")
+            
             return event_data
         except Exception as e:
             logger.error(f"Failed to generate event: {str(e)}")
@@ -289,6 +304,21 @@ class EventService:
             print(event_data)
 
             logger.info(f"Generated event: {event_data.get('title', 'Unknown event')}")
+            
+            # Generate an image for the event
+            if event_data and "description" in event_data:
+                try:
+                    image_url = self.generate_image(
+                        pet_type=pet_type,
+                        pet_name=pet_name,
+                        pet_state=pet_state.get("mood", "happy"),
+                        event_description=event_data["description"]
+                    )
+                    if image_url:
+                        event_data["image_url"] = image_url
+                except Exception as e:
+                    logger.error(f"Failed to generate image for event: {str(e)}")
+            
             return event_data
         except Exception as e:
             logger.error(f"Failed to generate event: {str(e)}")
@@ -311,3 +341,60 @@ class EventService:
         
         chosen_option = event["options"][choice_index]
         return chosen_option["effect"] 
+    
+
+    def generate_image(self, pet_type: str, pet_name: str, pet_state: str, event_description: str):
+        """
+        Generate an image based on the current pet state and event description.
+        
+        Args:
+            pet_type: The type of pet (e.g., "cat", "dog")
+            pet_name: The name of the pet
+            pet_state: The current mood of the pet
+            event_description: The description of the event
+            
+        Returns:
+            The URL of the generated image, or None if generation fails
+        """
+        if not self.is_llm_available():
+            logger.warning("LLM Service not available, cannot generate image")
+            return None
+        
+        # Customize the image description based on pet type
+        pet_description = ""
+        if pet_type.lower() == "cat":
+            pet_description = f"""A vibrant, energetic, and whimsical illustration of a cartoonish orange cat with a {pet_state} expression. 
+            The cat has a fluffy fur coat, with individual strands sticking out playfully. 
+            Its fur is a mix of warm orange and yellow hues, with subtle shading and highlights adding depth and texture. 
+            The cat’s face is highly expressive, with oversized, gleaming blue eyes that are wide open, exuding joy and excitement. 
+            The whiskers are long and slightly curved, giving a sense of movement and liveliness."""
+        elif pet_type.lower() == "dog":
+            pet_description = f"a playful, friendly dog with a wagging tail and a {pet_state} expression"
+        elif pet_type.lower() == "rabbit":
+            pet_description = f"a small, furry rabbit with long ears and a {pet_state} expression"
+        else:
+            pet_description = f"a cute, animated {pet_type} with a {pet_state} expression"
+        
+        prompt = f"""Generate an image of {pet_name} the {pet_type} based on the following story.
+
+        BASE IMAGE DESCRIPTION:
+        {pet_description}s
+
+        The scene should be colorful and engaging, with a light background that enhances the brightness of the overall image.
+        The pet should be the main focus of the image, with its body language and facial expression conveying its current mood.
+        The overall image should be fun and whimsical.  The pet should be cute and adorable.
+
+        STORY CONTEXT:
+        {event_description}
+        
+        Make sure the image reflects the story context and the pet's current mood ({pet_state}).
+        """
+
+        try:
+            image_url = self.llm_service.generate_image(prompt)
+            print(f"Generated image URL: {image_url}")
+            return image_url
+        except Exception as e:
+            logger.error(f"Error generating image: {str(e)}")
+            return None
+        

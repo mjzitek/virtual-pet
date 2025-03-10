@@ -107,3 +107,24 @@ class LLMService:
         except Exception as e:
             logger.error(f"Error generating structured output: {str(e)}")
             raise 
+
+
+
+    def generate_image(
+        self, 
+        prompt: str, 
+        size: str = "1024x1024"
+    ) -> Dict[str, Any]:
+        
+
+        try:
+            response = self.client.images.generate(
+                model="dall-e-3",
+                n=1,
+                size=size,
+                prompt=prompt
+            )
+            return response.data[0].url
+        except Exception as e:
+            logger.error(f"Error generating image: {str(e)}")
+            raise

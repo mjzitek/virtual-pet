@@ -95,11 +95,12 @@ def complete_setup():
         st.session_state["previous_events"] = []
         
         # Generate an initial story for the pet
-        st.session_state["current_event"] = event_service.generate_story(
-            st.session_state["pet_state"],
-            st.session_state["pet_type"],
-            st.session_state["pet_name"]
-        )
+        with st.spinner("Creating your pet's first adventure..."):
+            st.session_state["current_event"] = event_service.generate_story(
+                st.session_state["pet_state"],
+                st.session_state["pet_type"],
+                st.session_state["pet_name"]
+            )
         
         # Save the data after setup is complete
         pet_data = {
@@ -141,12 +142,13 @@ def update_pet_state(action):
         st.session_state["previous_events"] = st.session_state["previous_events"][-15:]
     
     # Always generate a new event after an action
-    st.session_state["current_event"] = event_service.generate_event(
-        st.session_state["pet_state"],
-        st.session_state["pet_type"],
-        st.session_state["pet_name"],
-        st.session_state["previous_events"]
-    )
+    with st.spinner("Generating next event..."):
+        st.session_state["current_event"] = event_service.generate_event(
+            st.session_state["pet_state"],
+            st.session_state["pet_type"],
+            st.session_state["pet_name"],
+            st.session_state["previous_events"]
+        )
     
     # Save the updated state
     pet_data = {
@@ -198,12 +200,13 @@ def handle_event_choice(choice_index):
             st.session_state["previous_events"] = st.session_state["previous_events"][-15:]
         
         # Generate a new event after the choice
-        st.session_state["current_event"] = event_service.generate_event(
-            st.session_state["pet_state"],
-            st.session_state["pet_type"],
-            st.session_state["pet_name"],
-            st.session_state["previous_events"]
-        )
+        with st.spinner("Generating next event..."):
+            st.session_state["current_event"] = event_service.generate_event(
+                st.session_state["pet_state"],
+                st.session_state["pet_type"],
+                st.session_state["pet_name"],
+                st.session_state["previous_events"]
+            )
         
         # Save the updated state
         pet_data = {
@@ -346,8 +349,23 @@ def main():
         with col2:
             # Display the pet image
             mood = st.session_state["pet_state"]["mood"]
-            image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
-            st.image(image_path, width=450)
+            
+            # Check if there's an active event with an image URL
+            if "current_event" in st.session_state and st.session_state["current_event"]:
+                event = st.session_state["current_event"]
+                if "image_url" in event:
+                    # Display the event-specific image
+                    st.image(event["image_url"], width=450)
+                else:
+                    # If there's an event but no image yet, show a loading indicator and the default image
+                    with st.spinner("Generating a custom image for this event..."):
+                        # Fall back to the static mood-based image while loading
+                        image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
+                        st.image(image_path, width=450)
+            else:
+                # Fall back to the static mood-based image
+                image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
+                st.image(image_path, width=450)
             
             # If there's no event, show the pet's mood
             if not st.session_state.get("current_event"):
