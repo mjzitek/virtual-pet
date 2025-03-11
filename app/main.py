@@ -6,34 +6,106 @@ It sets up the Streamlit UI and handles user interactions.
 """
 
 import os
-import logging
-import streamlit as st
-from typing import Dict, Any, Optional
 import sys
+import json
 import uuid
 import base64
+import logging
 import threading
-import time as import_time
 import time
+from typing import Dict, Any, List, Optional, Tuple
+from datetime import datetime, timedelta
 
-# Add the parent directory to the Python path to allow imports from the app package
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import streamlit as st
+from PIL import Image
 
-# Now we can import from the app package
+# Add the parent directory to the path so we can import from app
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import services
+from app.services.tts_service import TTSService
 from app.services.pet_service import PetService
 from app.services.event_service import EventService
-from app.services.tts_service import TTSService
-from app.config.settings import DEFAULT_PET_STATS
+from app.services.llm_service import LLMService
+from app.config.settings import APP_DIR, DEFAULT_PET_STATS
 from app.data.pet_names import get_random_name
+
+# Initialize services
+tts_service = TTSService()
+pet_service = PetService()
+event_service = EventService()
+llm_service = LLMService()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Initialize services
-pet_service = PetService()
-event_service = EventService()
-tts_service = TTSService()
+# Function to play the generated audio
+def generate_and_play_audio(event: Dict[str, Any]):
+    """
+    Generate and play audio for an event.
+    
+    Args:
+        event: The current event containing description and options
+    """
+    try:
+        # Generate a unique identifier for this event
+        event_id = f"{event.get('id', '')}"
+        if not event_id:
+            # If the event doesn't have an ID, create one from the description
+            import hashlib
+            event_id = hashlib.md5(event["description"].encode()).hexdigest()[:10]
+        
+        # Format the story text and options for speech
+        options_to_include = event.get("options", [])
+        formatted_text = tts_service.format_story_for_speech(
+            description=event["description"],
+            pet_name=st.session_state["pet_name"],
+            options=options_to_include
+        )
+        
+        # Generate the audio synchronously with a spinner
+        with st.spinner("Generating audio..."):
+            audio_path = tts_service.generate_speech(
+                text=formatted_text,
+                voice="sage",  # Use sage voice as requested
+                use_cache=True  # Use caching
+            )
+            
+            logger.info(f"Generated audio: {audio_path}")
+        
+        # Check if the file exists
+        if not os.path.exists(audio_path):
+            logger.error(f"Audio file does not exist: {audio_path}")
+            st.error("Audio file not found. Please try again.")
+            return
+        
+        # Get the file size for debugging
+        file_size = os.path.getsize(audio_path)
+        logger.info(f"Audio file size: {file_size} bytes")
+        
+        # Read the audio file and encode it as base64
+        with open(audio_path, "rb") as audio_file:
+            audio_bytes = audio_file.read()
+            audio_base64 = base64.b64encode(audio_bytes).decode()
+        
+        # Create an HTML audio element that autoplays without showing controls
+        audio_html = f"""
+        <audio autoplay>
+            <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
+            Your browser does not support the audio element.
+        </audio>
+        """
+        
+        # Display the audio player (hidden)
+        st.markdown(audio_html, unsafe_allow_html=True)
+        
+        # Show a success message
+        st.success("🔊 Playing audio narration...")
+        
+    except Exception as e:
+        st.error(f"Error playing audio: {str(e)}")
+        logger.error(f"Error playing audio: {str(e)}")
 
 # Initialize session state
 def initialize_session_state():
@@ -303,108 +375,121 @@ def update_pet_state(action):
 # Function to handle event choice
 def handle_event_choice(choice_index):
     """Handle the user's choice for an event."""
-    # Set generation state to track progress
-    st.session_state["generating_next_content"] = {
-        "story": {"status": "pending", "message": "Generating next story segment..."},
-        "image": {"status": "pending", "message": "Creating a custom image..."},
-        "audio": {"status": "pending", "message": "Preparing audio narration..."}
-    }
-    
-    # Get the current event
-    event = st.session_state["current_event"]
-    
-    # Get the selected option
-    if "options" in event and 0 <= choice_index < len(event["options"]):
-        selected_option = event["options"][choice_index]
+    # Get the current event before clearing it
+    if "current_event" in st.session_state:
+        old_event = st.session_state["current_event"]
         
-        # Apply the effects of the choice
-        if "effect" in selected_option:
-            effects = selected_option["effect"]
-            
-            # Update the pet state with the effects
-            for stat, value in effects.items():
-                if stat in st.session_state["pet_state"]:
-                    st.session_state["pet_state"][stat] += value
-                    
-                    # Ensure the stat stays within bounds (0-10)
-                    st.session_state["pet_state"][stat] = max(0, min(10, st.session_state["pet_state"][stat]))
+        # Completely remove the current event from session state
+        st.session_state["current_event"] = None
         
-        # Add the event to previous events
-        if "previous_events" not in st.session_state:
-            st.session_state["previous_events"] = []
-            
-        # Add a summary of the event and choice to previous events
-        event_summary = f"{event['title']} - Description: {event['description']} - Chose: {selected_option['text']}"
-        st.session_state["previous_events"].append(event_summary)
+        # Set a flag to indicate we're in a transition state
+        # This will prevent any UI elements from showing during generation
+        st.session_state["transitioning"] = True
         
-        # When we reach more than 10 events, generate a summary and store it
-        if len(st.session_state["previous_events"]) > 10 and "event_summaries" not in st.session_state:
-            st.session_state["event_summaries"] = []
+        # Set generation state to track progress
+        st.session_state["generating_next_content"] = {
+            "story": {"status": "pending", "message": "Generating next story segment..."},
+            "image": {"status": "pending", "message": "Creating a custom image..."},
+            "audio": {"status": "pending", "message": "Preparing audio narration..."}
+        }
+        
+        # Get the selected option from the stored old event
+        if "options" in old_event and 0 <= choice_index < len(old_event["options"]):
+            selected_option = old_event["options"][choice_index]
             
-        if len(st.session_state["previous_events"]) > 10 and len(st.session_state["previous_events"]) % 10 == 0:
-            # Generate a summary of the last 10 events
+            # Apply the effects of the choice
+            if "effect" in selected_option:
+                effects = selected_option["effect"]
+                
+                # Update the pet state with the effects
+                for stat, value in effects.items():
+                    if stat in st.session_state["pet_state"]:
+                        st.session_state["pet_state"][stat] += value
+                        
+                        # Ensure the stat stays within bounds (0-10)
+                        st.session_state["pet_state"][stat] = max(0, min(10, st.session_state["pet_state"][stat]))
+            
+            # Add the event to previous events
+            if "previous_events" not in st.session_state:
+                st.session_state["previous_events"] = []
+                
+            # Add a summary of the event and choice to previous events
+            event_summary = f"{old_event['title']} - Description: {old_event['description']} - Chose: {selected_option['text']}"
+            st.session_state["previous_events"].append(event_summary)
+            
+            # When we reach more than 10 events, generate a summary and store it
+            if len(st.session_state["previous_events"]) > 10 and "event_summaries" not in st.session_state:
+                st.session_state["event_summaries"] = []
+                
+            if len(st.session_state["previous_events"]) > 10 and len(st.session_state["previous_events"]) % 10 == 0:
+                # Generate a summary of the last 10 events
+                try:
+                    summary = event_service.generate_summary(st.session_state["previous_events"][-10:])
+                    st.session_state["event_summaries"].append(summary)
+                    logger.info(f"Generated summary for events {len(st.session_state['previous_events'])-9}-{len(st.session_state['previous_events'])}")
+                except Exception as e:
+                    logger.error(f"Failed to generate event summary: {str(e)}")
+            
+            # Generate the next event based on the choice
             try:
-                summary = event_service.generate_summary(st.session_state["previous_events"][-10:])
-                st.session_state["event_summaries"].append(summary)
-                logger.info(f"Generated summary for events {len(st.session_state['previous_events'])-9}-{len(st.session_state['previous_events'])}")
+                # Update story generation status
+                st.session_state["generating_next_content"]["story"]["status"] = "in_progress"
+                
+                # Prepare event history context
+                event_history = st.session_state.get("previous_events", [])
+                event_summaries = st.session_state.get("event_summaries", [])
+                
+                # Use generate_event instead of generate_next_event
+                next_event = event_service.generate_event(
+                    pet_state=st.session_state["pet_state"],
+                    pet_type=st.session_state["pet_type"],
+                    pet_name=st.session_state["pet_name"],
+                    previous_events=event_history,
+                    event_summaries=event_summaries
+                )
+                
+                # Update story generation status
+                st.session_state["generating_next_content"]["story"]["status"] = "complete"
+                st.session_state["generating_next_content"]["image"]["status"] = "in_progress"
+                
+                # Update the current event
+                st.session_state["current_event"] = next_event
+                
+                # Ensure we have a valid story title
+                if "story_title" not in st.session_state or not st.session_state["story_title"]:
+                    st.session_state["story_title"] = f"{st.session_state['pet_name']}'s Great Adventure"
+                
+                # Image should be generated as part of the event generation
+                if "image_url" in next_event:
+                    st.session_state["generating_next_content"]["image"]["status"] = "complete"
+                
+                # Clear the transitioning flag when generation is complete
+                st.session_state["transitioning"] = False
+                
+                # Save the updated pet data
+                pet_data = {
+                    "pet_name": st.session_state["pet_name"],
+                    "pet_type": st.session_state["pet_type"],
+                    "pet_state": st.session_state["pet_state"],
+                    "setup_complete": st.session_state["setup_complete"],
+                    "current_event": st.session_state["current_event"],
+                    "previous_events": st.session_state["previous_events"],
+                    "event_summaries": st.session_state.get("event_summaries", []),
+                    "story_title": st.session_state["story_title"],
+                    "event_counter": st.session_state.get("event_counter", 0),
+                    "young_reader_mode": st.session_state.get("young_reader_mode", False),
+                    "base_storyline": st.session_state.get("base_storyline", ""),
+                    "story_location": st.session_state["story_location"]
+                }
+                pet_service.save_pet_data(pet_data, st.session_state["session_id"])
             except Exception as e:
-                logger.error(f"Failed to generate event summary: {str(e)}")
-        
-        # Generate the next event based on the choice
-        try:
-            # Update story generation status
-            st.session_state["generating_next_content"]["story"]["status"] = "in_progress"
-            
-            # Prepare event history context
-            event_history = st.session_state.get("previous_events", [])
-            event_summaries = st.session_state.get("event_summaries", [])
-            
-            # Use generate_event instead of generate_next_event
-            next_event = event_service.generate_event(
-                pet_state=st.session_state["pet_state"],
-                pet_type=st.session_state["pet_type"],
-                pet_name=st.session_state["pet_name"],
-                previous_events=event_history,
-                event_summaries=event_summaries
-            )
-            
-            # Update story generation status
-            st.session_state["generating_next_content"]["story"]["status"] = "complete"
-            st.session_state["generating_next_content"]["image"]["status"] = "in_progress"
-            
-            # Update the current event
-            st.session_state["current_event"] = next_event
-            
-            # Ensure we have a valid story title
-            if "story_title" not in st.session_state or not st.session_state["story_title"]:
-                st.session_state["story_title"] = f"{st.session_state['pet_name']}'s Great Adventure"
-            
-            # Image should be generated as part of the event generation
-            if "image_url" in next_event:
-                st.session_state["generating_next_content"]["image"]["status"] = "complete"
-            
-            # Save the updated pet data
-            pet_data = {
-                "pet_name": st.session_state["pet_name"],
-                "pet_type": st.session_state["pet_type"],
-                "pet_state": st.session_state["pet_state"],
-                "setup_complete": st.session_state["setup_complete"],
-                "current_event": st.session_state["current_event"],
-                "previous_events": st.session_state["previous_events"],
-                "event_summaries": st.session_state.get("event_summaries", []),
-                "story_title": st.session_state["story_title"],
-                "event_counter": st.session_state.get("event_counter", 0),
-                "young_reader_mode": st.session_state.get("young_reader_mode", False),
-                "base_storyline": st.session_state.get("base_storyline", ""),
-                "story_location": st.session_state["story_location"]
-            }
-            pet_service.save_pet_data(pet_data, st.session_state["session_id"])
-        except Exception as e:
-            st.error(f"Error generating next event: {str(e)}")
-            logger.error(f"Error generating next event: {str(e)}")
-            # Mark story generation as failed
-            st.session_state["generating_next_content"]["story"]["status"] = "failed"
-            st.session_state["generating_next_content"]["story"]["message"] = f"Error: {str(e)}"
+                st.error(f"Error generating next event: {str(e)}")
+                logger.error(f"Error generating next event: {str(e)}")
+                # Mark story generation as failed
+                st.session_state["generating_next_content"]["story"]["status"] = "failed"
+                st.session_state["generating_next_content"]["story"]["message"] = f"Error: {str(e)}"
+                # Clear the transitioning flag on error
+                st.session_state["transitioning"] = False
     
     # Force a rerun to update the UI with the new event
     st.rerun()
@@ -415,67 +500,6 @@ def reset_pet():
     pet_service.reset_pet_data(st.session_state.get("session_id"))
     # Set a flag to indicate that we want to reset
     st.session_state["reset_requested"] = True
-
-# Function to play the generated audio
-def generate_and_play_audio(event: Dict[str, Any]):
-    """
-    Play the already-generated audio for an event.
-    
-    Args:
-        event: The current event containing description and options
-    """
-    try:
-        # Generate a unique identifier for this event
-        event_id = f"{event.get('id', '')}"
-        if not event_id:
-            # If the event doesn't have an ID, create one from the description
-            import hashlib
-            event_id = hashlib.md5(event["description"].encode()).hexdigest()[:10]
-        
-        # Get the audio path from session state
-        audio_cache_key = f"audio_path_{event_id}"
-        if audio_cache_key not in st.session_state:
-            logger.error("Audio path not found in session state")
-            st.error("Audio not found. Please try again.")
-            return
-        
-        audio_path = st.session_state[audio_cache_key]
-        logger.info(f"Playing audio from path: {audio_path}")
-        
-        # Check if the file exists
-        if not os.path.exists(audio_path):
-            logger.error(f"Audio file does not exist: {audio_path}")
-            st.error("Audio file not found. Please try generating it again.")
-            # Remove the path from session state
-            del st.session_state[audio_cache_key]
-            return
-        
-        # Get the file size for debugging
-        file_size = os.path.getsize(audio_path)
-        logger.info(f"Audio file size: {file_size} bytes")
-        
-        # Read the audio file and encode it as base64
-        with open(audio_path, "rb") as audio_file:
-            audio_bytes = audio_file.read()
-            audio_base64 = base64.b64encode(audio_bytes).decode()
-        
-        # Create an HTML audio element that autoplays without showing controls
-        audio_html = f"""
-        <audio autoplay>
-            <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
-            Your browser does not support the audio element.
-        </audio>
-        """
-        
-        # Display the audio player (hidden)
-        st.markdown(audio_html, unsafe_allow_html=True)
-        
-        # Show a success message
-        st.success("🔊 Playing audio narration...")
-        
-    except Exception as e:
-        st.error(f"Error playing audio: {str(e)}")
-        logger.error(f"Error playing audio: {str(e)}")
 
 # Function to generate a random pet name
 def generate_random_name():
@@ -509,247 +533,22 @@ def on_pet_type_change():
     # The pet preview image is already updated automatically
     pass  # No additional action needed for now
 
-# Function to start generating audio asynchronously
-def start_audio_generation(event: Dict[str, Any]):
-    """
-    Start generating audio for an event in the background.
-    
-    Args:
-        event: The current event containing description and options
-    """
-    # Generate a unique identifier for this event
-    event_id = f"{event.get('id', '')}"
-    if not event_id:
-        # If the event doesn't have an ID, create one from the description
-        import hashlib
-        event_id = hashlib.md5(event["description"].encode()).hexdigest()[:10]
-    
-    logger.info(f"Generated event_id for audio: {event_id}")
-    
-    # Check if we already have the audio path in session state
-    audio_cache_key = f"audio_path_{event_id}"
-    audio_generating_key = f"audio_generating_{event_id}"
-    audio_status_key = f"audio_status_{event_id}"
-    
-    # Clear any existing audio for this event to avoid using old audio
-    if audio_cache_key in st.session_state:
-        logger.info(f"Clearing existing audio for event: {event_id}")
-        del st.session_state[audio_cache_key]
-    
-    # Clear any existing status file for this event
-    import glob
-    status_file = os.path.join(tts_service.get_audio_dir(), f"{event_id}_status.json")
-    if os.path.exists(status_file):
-        logger.info(f"Removing existing status file: {status_file}")
-        os.remove(status_file)
-    
-    # Mark that we're generating audio for this event
-    st.session_state[audio_generating_key] = True
-    st.session_state[audio_status_key] = "in_progress"
-    
-    # Store the start time for timeout checking
-    st.session_state["audio_start_time"] = import_time.time()
-    
-    # Update the generation status if it exists
-    if "generating_next_content" in st.session_state:
-        st.session_state["generating_next_content"]["audio"]["status"] = "in_progress"
-    
-    # Format the story text and options for speech
-    options_to_include = event.get("options", [])
-    formatted_text = tts_service.format_story_for_speech(
-        description=event["description"],
-        pet_name=st.session_state["pet_name"],
-        options=options_to_include
-    )
-    
-    # Store the event_id in session state for reference
-    st.session_state["current_audio_event_id"] = event_id
-    
-    # Generate the audio in a separate thread
-    def generate_audio_thread():
-        try:
-            # Generate the audio
-            audio_path = tts_service.generate_speech(
-                text=formatted_text,
-                voice="sage",  # Use sage voice as requested
-                use_cache=True  # Use caching
-            )
-            
-            logger.info(f"Audio generation successful, path: {audio_path}")
-            
-            # Store the audio path and status in a file that can be checked later
-            import json
-            # Use the same directory as the audio file
-            result_file = os.path.join(tts_service.get_audio_dir(), f"{event_id}_status.json")
-            with open(result_file, 'w') as f:
-                json.dump({
-                    "status": "complete",
-                    "path": audio_path,
-                    "timestamp": import_time.time(),
-                    "event_id": event_id,
-                    "description": event["description"][:50]  # Store a snippet of the description for debugging
-                }, f)
-            
-            logger.info(f"Audio generation complete, saved status to {result_file}")
-            
-        except Exception as e:
-            logger.error(f"Error generating audio: {str(e)}")
-            # Store the error in a file that can be checked later
-            import json
-            result_file = os.path.join(tts_service.get_audio_dir(), f"{event_id}_status.json")
-            with open(result_file, 'w') as f:
-                json.dump({
-                    "status": "failed",
-                    "error": str(e),
-                    "timestamp": import_time.time(),
-                    "event_id": event_id,
-                    "description": event["description"][:50]  # Store a snippet of the description for debugging
-                }, f)
-            logger.error(f"Saved error status to {result_file}")
-    
-    # Start the thread
-    threading.Thread(target=generate_audio_thread).start()
-    
-    # Force a rerun to update the UI
-    st.rerun()
-
-# Function to check audio generation status
-def check_audio_generation_status(event: Dict[str, Any]):
-    """
-    Check the status of audio generation for an event.
-    
-    Args:
-        event: The current event
-    """
-    # Generate a unique identifier for this event
-    event_id = f"{event.get('id', '')}"
-    if not event_id:
-        # If the event doesn't have an ID, create one from the description
-        import hashlib
-        event_id = hashlib.md5(event["description"].encode()).hexdigest()[:10]
-    
-    logger.info(f"Checking audio status for event_id: {event_id}")
-    
-    # Check if we already have the audio path in session state
-    audio_cache_key = f"audio_path_{event_id}"
-    audio_generating_key = f"audio_generating_{event_id}"
-    audio_status_key = f"audio_status_{event_id}"
-    
-    # If audio is already in session state, we're done
-    if audio_cache_key in st.session_state:
-        logger.info(f"Audio already in session state: {st.session_state[audio_cache_key]}")
-        return
-    
-    # Check if we have a status file
-    import json
-    import time
-    import glob
-    
-    # Look for any status files in the directory
-    status_files = glob.glob(os.path.join(tts_service.get_audio_dir(), "*_status.json"))
-    logger.info(f"Found {len(status_files)} status files: {status_files}")
-    
-    # First try the exact event_id
-    result_file = os.path.join(tts_service.get_audio_dir(), f"{event_id}_status.json")
-    logger.info(f"Checking for status file: {result_file}")
-    
-    if not os.path.exists(result_file):
-        # If the exact file doesn't exist, check if we have a stored event_id
-        stored_event_id = st.session_state.get("current_audio_event_id")
-        if stored_event_id and stored_event_id == event_id:
-            logger.info(f"Using stored event_id: {stored_event_id}")
-            result_file = os.path.join(tts_service.get_audio_dir(), f"{stored_event_id}_status.json")
-            logger.info(f"Checking for status file with stored ID: {result_file}")
-    
-    if os.path.exists(result_file):
-        logger.info(f"Status file found: {result_file}")
-        try:
-            with open(result_file, 'r') as f:
-                result = json.load(f)
-            
-            logger.info(f"Status file contents: {result}")
-            
-            # Check the status
-            if result["status"] == "complete":
-                # Audio generation is complete
-                logger.info(f"Audio generation complete, setting session state")
-                
-                # Verify this is the correct event by checking the event_id
-                if "event_id" in result and result["event_id"] == event_id:
-                    st.session_state[audio_cache_key] = result["path"]
-                    st.session_state[audio_generating_key] = False
-                    st.session_state[audio_status_key] = "complete"
-                    
-                    # Update the generation status if it exists
-                    if "generating_next_content" in st.session_state:
-                        st.session_state["generating_next_content"]["audio"]["status"] = "complete"
-                    
-                    # Remove the status file
-                    os.remove(result_file)
-                    logger.info(f"Removed status file after processing")
-                    
-                    # Force a rerun to update the UI
-                    logger.info(f"Forcing rerun to update UI")
-                    st.rerun()
-                else:
-                    logger.warning(f"Status file event_id mismatch: {result.get('event_id', 'None')} != {event_id}")
-                    # Remove the status file as it's for a different event
-                    os.remove(result_file)
-                    
-            elif result["status"] == "failed":
-                # Audio generation failed
-                logger.info(f"Audio generation failed, setting session state")
-                
-                # Verify this is the correct event
-                if "event_id" in result and result["event_id"] == event_id:
-                    st.session_state[audio_generating_key] = False
-                    st.session_state[audio_status_key] = "failed"
-                    
-                    # Update the generation status if it exists
-                    if "generating_next_content" in st.session_state:
-                        st.session_state["generating_next_content"]["audio"]["status"] = "failed"
-                        st.session_state["generating_next_content"]["audio"]["message"] = f"Error: {result.get('error', 'Unknown error')}"
-                    
-                    # Remove the status file
-                    os.remove(result_file)
-                    logger.info(f"Removed status file after processing")
-                    
-                    # Force a rerun to update the UI
-                    logger.info(f"Forcing rerun to update UI")
-                    st.rerun()
-                else:
-                    logger.warning(f"Status file event_id mismatch: {result.get('event_id', 'None')} != {event_id}")
-                    # Remove the status file as it's for a different event
-                    os.remove(result_file)
-        except Exception as e:
-            logger.error(f"Error checking audio status: {str(e)}")
-    else:
-        logger.info(f"Status file not found: {result_file}")
-    
-    # If we're generating audio and it's been more than 60 seconds, assume it failed
-    if audio_generating_key in st.session_state and st.session_state[audio_generating_key]:
-        # Check if we have a timestamp
-        if "audio_start_time" in st.session_state:
-            elapsed = time.time() - st.session_state["audio_start_time"]
-            if elapsed > 60:  # 60 seconds timeout
-                # Audio generation timed out
-                logger.warning(f"Audio generation timed out after {elapsed} seconds")
-                st.session_state[audio_generating_key] = False
-                st.session_state[audio_status_key] = "failed"
-                
-                # Update the generation status if it exists
-                if "generating_next_content" in st.session_state:
-                    st.session_state["generating_next_content"]["audio"]["status"] = "failed"
-                    st.session_state["generating_next_content"]["audio"]["message"] = "Error: Audio generation timed out"
-                
-                # Force a rerun to update the UI
-                st.rerun()
-
 # Main application UI
 def main():
     """Main application function."""
     # Print a message to indicate this file is being run
-    print("Running app/main.py - Virtual Pet Application with Event System")
+    logger.info("Starting Virtual Pet application")
+    
+    # Initialize session state if needed
+    initialize_session_state()
+    
+    # Set page config
+    st.set_page_config(
+        page_title="Virtual Pet",
+        page_icon="🐾",
+        layout="centered",
+        initial_sidebar_state="collapsed"
+    )
     
     # Check if reset was requested
     if st.session_state.get("reset_requested", False):
@@ -761,6 +560,24 @@ def main():
     
     # Initialize session state
     initialize_session_state()
+    
+    # Check if we're in a transition state (generating new content)
+    if st.session_state.get("transitioning", False):
+        # Show only a spinner during transition
+        st.spinner("Generating your next adventure...")
+        
+        # Check if generation is complete
+        if "generating_next_content" in st.session_state:
+            gen_status = st.session_state["generating_next_content"]
+            if all(status["status"] == "complete" for status in gen_status.values()):
+                # Clear the transition state and generation state
+                st.session_state.pop("transitioning", None)
+                st.session_state.pop("generating_next_content", None)
+                # Force a rerun to update the UI
+                st.rerun()
+        
+        # Don't show any other UI elements during transition
+        return
     
     # Dynamic title based on setup status
     if st.session_state["setup_complete"]:
@@ -988,90 +805,6 @@ def main():
             with st.container():
                 st.markdown("---")
                 
-                # Check if we're in the process of generating content
-                if "generating_next_content" in st.session_state:
-                    gen_status = st.session_state["generating_next_content"]
-                    
-                    # Create a progress container
-                    with st.container():
-                        st.markdown("<h3>Generating your next adventure...</h3>", unsafe_allow_html=True)
-                        
-                        # Create a stylish progress display
-                        progress_html = """
-                        <div style="padding: 20px; border-radius: 10px; background-color: #f8f9fa; margin-bottom: 20px;">
-                        """
-                        
-                        # Story generation status
-                        story_status = gen_status["story"]["status"]
-                        story_icon = "⏳" if story_status == "pending" else "🔄" if story_status == "in_progress" else "✅" if story_status == "complete" else "❌"
-                        story_color = "#6c757d" if story_status == "pending" else "#007bff" if story_status == "in_progress" else "#28a745" if story_status == "complete" else "#dc3545"
-                        progress_html += f"""
-                        <div style="margin-bottom: 15px;">
-                            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                <span style="font-size: 24px; margin-right: 10px;">{story_icon}</span>
-                                <span style="font-weight: bold; color: {story_color};">Story</span>
-                                <span style="margin-left: auto; color: {story_color};">{story_status.replace("_", " ").title()}</span>
-                            </div>
-                            <div style="color: #6c757d; font-size: 14px; margin-left: 34px;">{gen_status["story"]["message"]}</div>
-                        </div>
-                        """
-                        
-                        # Image generation status
-                        image_status = gen_status["image"]["status"]
-                        image_icon = "⏳" if image_status == "pending" else "🔄" if image_status == "in_progress" else "✅" if image_status == "complete" else "❌"
-                        image_color = "#6c757d" if image_status == "pending" else "#007bff" if image_status == "in_progress" else "#28a745" if image_status == "complete" else "#dc3545"
-                        progress_html += f"""
-                        <div style="margin-bottom: 15px;">
-                            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                <span style="font-size: 24px; margin-right: 10px;">{image_icon}</span>
-                                <span style="font-weight: bold; color: {image_color};">Image</span>
-                                <span style="margin-left: auto; color: {image_color};">{image_status.replace("_", " ").title()}</span>
-                            </div>
-                            <div style="color: #6c757d; font-size: 14px; margin-left: 34px;">{gen_status["image"]["message"]}</div>
-                        </div>
-                        """
-                        
-                        # Audio generation status
-                        audio_status = gen_status["audio"]["status"]
-                        audio_icon = "⏳" if audio_status == "pending" else "🔄" if audio_status == "in_progress" else "✅" if audio_status == "complete" else "❌"
-                        audio_color = "#6c757d" if audio_status == "pending" else "#007bff" if audio_status == "in_progress" else "#28a745" if audio_status == "complete" else "#dc3545"
-                        progress_html += f"""
-                        <div>
-                            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                                <span style="font-size: 24px; margin-right: 10px;">{audio_icon}</span>
-                                <span style="font-weight: bold; color: {audio_color};">Audio</span>
-                                <span style="margin-left: auto; color: {audio_color};">{audio_status.replace("_", " ").title()}</span>
-                            </div>
-                            <div style="color: #6c757d; font-size: 14px; margin-left: 34px;">{gen_status["audio"]["message"]}</div>
-                        </div>
-                        """
-                        
-                        progress_html += """
-                        </div>
-                        """
-                        
-                        # Display the progress
-                        st.markdown(progress_html, unsafe_allow_html=True)
-                        
-                        # Add a fun message while waiting
-                        if not all(status["status"] == "complete" for status in gen_status.values()):
-                            messages = [
-                                "Your pet is thinking of the next adventure...",
-                                "Creating a magical world just for you...",
-                                "Brewing up something exciting...",
-                                "Gathering stardust for your story...",
-                                "Weaving a tale of wonder and excitement..."
-                            ]
-                            import random
-                            st.markdown(f"<div style='text-align: center; font-style: italic;'>{random.choice(messages)}</div>", unsafe_allow_html=True)
-                        
-                        # If all content is generated, remove the generating state
-                        if all(status["status"] == "complete" for status in gen_status.values()):
-                            # Clear the generating state after a short delay
-                            st.session_state.pop("generating_next_content", None)
-                            # Force a rerun to update the UI
-                            st.rerun()
-                
                 # Display the story description
                 st.markdown(f'<div style="font-size: 20px;">{event["description"]}</div>', unsafe_allow_html=True)
                 
@@ -1082,132 +815,76 @@ def main():
                     import hashlib
                     event_id = hashlib.md5(event["description"].encode()).hexdigest()[:10]
                 
-                # Check if we already have the audio path in session state
-                audio_cache_key = f"audio_path_{event_id}"
-                audio_generating_key = f"audio_generating_{event_id}"
-                audio_status_key = f"audio_status_{event_id}"
-                
-                # Log the current state for debugging
-                logger.info(f"Audio status - cache_key in session: {audio_cache_key in st.session_state}, generating_key: {st.session_state.get(audio_generating_key, False)}")
-                
-                # Check the status of audio generation
-                check_audio_generation_status(event)
-                
-                # Start generating audio if it hasn't been generated yet
-                if audio_cache_key not in st.session_state and not st.session_state.get(audio_generating_key, False):
-                    logger.info("Starting audio generation")
-                    # Start generating audio in the background
-                    start_audio_generation(event)
-                    # Force a rerun to update the UI
-                    st.rerun()
-                
-                # Determine button state based on audio generation status
-                if audio_cache_key in st.session_state:
-                    # Audio is ready, show play button
-                    logger.info(f"Audio is ready, showing play button. Path: {st.session_state[audio_cache_key]}")
+                # Add a button to play audio
+                col1, col2 = st.columns([1, 3])
+                with col1:
                     if st.button("🔊 Play Story Audio", 
                                 help="Listen to the story and options read aloud",
                                 on_click=generate_and_play_audio,
                                 args=(event,)):
                         pass  # The on_click handler will take care of playing the audio
-                elif st.session_state.get(audio_generating_key, False):
-                    # Audio is being generated, show spinner instead of disabled button
-                    logger.info("Audio is being generated, showing spinner")
-                    with st.spinner("Generating Audio..."):
-                        st.info("🔄 Generating audio for this story...", icon="🔊")
-                else:
-                    # Something went wrong or we haven't started generating yet, show retry button
-                    logger.info("Audio generation not started or failed, showing generate button")
-                    if st.button("🔄 Generate Audio", 
-                                help="Generate audio for this story",
-                                on_click=start_audio_generation,
-                                args=(event,)):
-                        pass  # The on_click handler will take care of starting audio generation
                 
                 # Add extra space between description and options
                 st.markdown("<br>", unsafe_allow_html=True)
                 
                 # Display the event options
                 if "options" in event:
-                    # Only show options if we're not in the middle of generating content
-                    if "generating_next_content" not in st.session_state:
-                        st.write("---")
-                        st.subheader(f"What should {st.session_state['pet_name']} do next?")
+                    # Always show options regardless of generating state
+                    st.write("---")
+                    st.subheader(f"What should {st.session_state['pet_name']} do next?")
+                    
+                    # Add some space after the header
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    # Create a custom component for each option
+                    for i, option in enumerate(event["options"]):
+                        # Format the option text with effects
+                        effects = option["effect"]
+                        effects_text = []
+                        if effects["hunger"] != 0:
+                            effects_text.append(f"Hunger {'+' if effects['hunger'] > 0 else ''}{effects['hunger']}")
+                        if effects["energy"] != 0:
+                            effects_text.append(f"Energy {'+' if effects['energy'] > 0 else ''}{effects['energy']}")
+                        if effects["happiness"] != 0:
+                            effects_text.append(f"Happiness {'+' if effects['happiness'] > 0 else ''}{effects['happiness']}")
                         
-                        # Add some space after the header
-                        st.markdown("<br>", unsafe_allow_html=True)
+                        # Format the effects text
+                        effects_str = f" ({', '.join(effects_text)})" if effects_text else ""
                         
-                        # Create a custom component for each option
-                        for i, option in enumerate(event["options"]):
-                            # Format the option text with effects
-                            effects = option["effect"]
-                            effects_text = []
-                            if effects["hunger"] != 0:
-                                effects_text.append(f"Hunger {'+' if effects['hunger'] > 0 else ''}{effects['hunger']}")
-                            if effects["energy"] != 0:
-                                effects_text.append(f"Energy {'+' if effects['energy'] > 0 else ''}{effects['energy']}")
-                            if effects["happiness"] != 0:
-                                effects_text.append(f"Happiness {'+' if effects['happiness'] > 0 else ''}{effects['happiness']}")
+                        # Create a custom component with columns
+                        cols = st.columns([1, 15])
+                        
+                        # Number in the first column
+                        with cols[0]:
+                            # Create a circular container for the number
+                            st.markdown(f"""
+                            <div style="
+                                width: 30px;
+                                height: 30px;
+                                border-radius: 50%;
+                                background-color: #f0f2f6;
+                                border: 1px solid #ccc;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-weight: bold;
+                                margin-top: 5px;
+                            ">
+                                {i+1}
+                            </div>
+                            """, unsafe_allow_html=True)
                             
-                            # Format the effects text
-                            effects_str = f" ({', '.join(effects_text)})" if effects_text else ""
-                            
-                            # Create a custom component with columns
-                            cols = st.columns([1, 15])
-                            
-                            # Number in the first column
-                            with cols[0]:
-                                # Create a circular container for the number
-                                st.markdown(f"""
-                                <div style="
-                                    width: 30px;
-                                    height: 30px;
-                                    border-radius: 50%;
-                                    background-color: #f0f2f6;
-                                    border: 1px solid #ccc;
-                                    display: flex;
-                                    align-items: center;
-                                    justify-content: center;
-                                    font-weight: bold;
-                                    margin-top: 5px;
-                                ">
-                                    {i+1}
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                            # Option text in the second column
-                            with cols[1]:
-                                # Create a button that looks like text
-                                if st.button(f"{option['text']}{effects_str}", key=f"option_{i}"):
-                                    handle_event_choice(i)
-                            
-                            # Add some space between options
-                            st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+                        # Option text in the second column
+                        with cols[1]:
+                            # Create a button that looks like text
+                            if st.button(f"{option['text']}{effects_str}", key=f"option_{i}"):
+                                handle_event_choice(i)
+                        
+                        # Add some space between options
+                        st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
         # Add the reset button at the very bottom of the page
         st.markdown("---")
-        
-        # Add an expandable section for event history
-        if "previous_events" in st.session_state and len(st.session_state["previous_events"]) > 0:
-            with st.expander("Event History"):
-                # Display event summaries if available
-                if "event_summaries" in st.session_state and len(st.session_state["event_summaries"]) > 0:
-                    st.subheader("Story Summaries")
-                    for i, summary in enumerate(st.session_state["event_summaries"]):
-                        with st.container():
-                            st.markdown(f"**Chapter {i+1}**")
-                            st.markdown(f'<div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 15px;">{summary}</div>', unsafe_allow_html=True)
-                    st.markdown("---")
-                
-                # Display recent events
-                st.subheader("Recent Events")
-                # Show the most recent events first
-                for event in reversed(st.session_state["previous_events"]):
-                    st.markdown(f"• {event}")
-                
-                # Display event count
-                total_events = len(st.session_state["previous_events"])
-                st.caption(f"Total events: {total_events}")
         
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
