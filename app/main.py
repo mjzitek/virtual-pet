@@ -49,6 +49,10 @@ def generate_and_play_audio(event: Dict[str, Any]):
         event: The current event containing description and options
     """
     try:
+        # Set a flag to indicate we're generating audio
+        # This will prevent the UI from going blank during generation
+        st.session_state["generating_audio"] = True
+        
         # Generate a unique identifier for this event
         event_id = f"{event.get('id', '')}"
         if not event_id:
@@ -78,6 +82,8 @@ def generate_and_play_audio(event: Dict[str, Any]):
         if not os.path.exists(audio_path):
             logger.error(f"Audio file does not exist: {audio_path}")
             st.error("Audio file not found. Please try again.")
+            # Clear the generating flag
+            st.session_state.pop("generating_audio", None)
             return
         
         # Get the file size for debugging
@@ -100,12 +106,17 @@ def generate_and_play_audio(event: Dict[str, Any]):
         # Display the audio player (hidden)
         st.markdown(audio_html, unsafe_allow_html=True)
         
-        # Show a success message
-        st.success("🔊 Playing audio narration...")
+        # Show a success message with more visibility
+        st.markdown("<div style='text-align:center; padding: 10px; background-color: #d4edda; color: #155724; border-radius: 5px; margin: 10px 0;'><h4>🔊 Playing audio narration...</h4></div>", unsafe_allow_html=True)
+        
+        # Clear the generating flag
+        st.session_state.pop("generating_audio", None)
         
     except Exception as e:
         st.error(f"Error playing audio: {str(e)}")
         logger.error(f"Error playing audio: {str(e)}")
+        # Clear the generating flag
+        st.session_state.pop("generating_audio", None)
 
 # Initialize session state
 def initialize_session_state():
@@ -606,6 +617,12 @@ def main():
     
     # Render the main UI in the container
     with main_container.container():
+        # Check if we're generating audio - if so, show a spinner at the top
+        if st.session_state.get("generating_audio", False):
+            st.spinner("Generating audio...")
+            st.markdown("<div style='text-align:center;'><h4>Creating audio narration, please wait...</h4></div>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+        
         # Dynamic title based on setup status
         if st.session_state["setup_complete"]:
             # Generate a dynamic title for the pet's adventure
@@ -720,10 +737,16 @@ def main():
                     # Add a button to play audio
                     col1, col2 = st.columns([1, 3])
                     with col1:
-                        if st.button("🔊 Play Story Audio", 
-                                    help="Listen to the story and options read aloud",
+                        # Change button text if audio is generating
+                        button_text = "⏳ Generating..." if st.session_state.get("generating_audio", False) else "🔊 Play Story Audio"
+                        button_help = "Audio is being generated, please wait..." if st.session_state.get("generating_audio", False) else "Listen to the story and options read aloud"
+                        
+                        # Disable the button if audio is already generating
+                        if st.button(button_text, 
+                                    help=button_help,
                                     on_click=generate_and_play_audio,
-                                    args=(event,)):
+                                    args=(event,),
+                                    disabled=st.session_state.get("generating_audio", False)):
                             pass  # The on_click handler will take care of playing the audio
                     
                     # Add extra space between description and options
