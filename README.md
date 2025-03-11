@@ -1,5 +1,7 @@
 # Virtual Pet Simulator
 
+** This project is part of a March "Code Jam" I am doing.  Read more about it here: https://mikezitek.dev/blog/posts/march-code-jam **
+
 An AI-powered virtual pet application that allows users to interact with a digital pet through guided choices.
 
 ## Features

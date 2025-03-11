@@ -110,10 +110,21 @@ def generate_and_play_audio(event: Dict[str, Any]):
 # Initialize session state
 def initialize_session_state():
     """Initialize or restore session state."""
-    # Generate a session ID if one doesn't exist
-    if "session_id" not in st.session_state:
-        st.session_state["session_id"] = str(uuid.uuid4())
-        logger.info(f"Generated new session ID: {st.session_state['session_id']}")
+    # Check if we have a session ID in the session state or query parameters
+    if 'session_id' not in st.session_state:
+        # Check for existing session ID in query parameters
+        session_id_from_params = st.query_params.get("session_id", None)
+        
+        if session_id_from_params:
+            # Use the session ID from the query parameters
+            st.session_state["session_id"] = session_id_from_params
+            logger.info(f"Restored session ID from URL: {session_id_from_params}")
+        else:
+            # Generate a new session ID
+            st.session_state["session_id"] = str(uuid.uuid4())
+            # Update the URL with the session ID
+            st.query_params["session_id"] = st.session_state["session_id"]
+            logger.info(f"Generated new session ID: {st.session_state['session_id']}")
     
     # Check if we have saved pet data for this session
     saved_data = pet_service.load_pet_data(st.session_state["session_id"])
@@ -386,6 +397,10 @@ def handle_event_choice(choice_index):
         # This will prevent any UI elements from showing during generation
         st.session_state["transitioning"] = True
         
+        # Clear any existing generation state
+        if "generating_next_content" in st.session_state:
+            del st.session_state["generating_next_content"]
+        
         # Set generation state to track progress
         st.session_state["generating_next_content"] = {
             "story": {"status": "pending", "message": "Generating next story segment..."},
@@ -497,7 +512,12 @@ def handle_event_choice(choice_index):
 # Function to reset pet
 def reset_pet():
     """Reset the pet by deleting saved data and clearing session state."""
+    # Delete saved data file
     pet_service.reset_pet_data(st.session_state.get("session_id"))
+    
+    # Clear the query parameters
+    st.query_params.clear()
+    
     # Set a flag to indicate that we want to reset
     st.session_state["reset_requested"] = True
 
@@ -539,9 +559,6 @@ def main():
     # Print a message to indicate this file is being run
     logger.info("Starting Virtual Pet application")
     
-    # Initialize session state if needed
-    initialize_session_state()
-    
     # Set page config
     st.set_page_config(
         page_title="Virtual Pet",
@@ -549,6 +566,9 @@ def main():
         layout="centered",
         initial_sidebar_state="collapsed"
     )
+    
+    # Initialize session state if needed
+    initialize_session_state()
     
     # Check if reset was requested
     if st.session_state.get("reset_requested", False):
@@ -558,13 +578,18 @@ def main():
         # Use rerun outside of a callback
         st.rerun()
     
-    # Initialize session state
-    initialize_session_state()
+    # Create a placeholder for the entire UI
+    # This allows us to clear and replace the entire UI when needed
+    main_container = st.empty()
     
     # Check if we're in a transition state (generating new content)
     if st.session_state.get("transitioning", False):
-        # Show only a spinner during transition
-        st.spinner("Generating your next adventure...")
+        # Show only a spinner in the main container
+        with main_container.container():
+            st.markdown("<div style='text-align:center; margin-top:100px;'>", unsafe_allow_html=True)
+            st.spinner("Generating your next adventure...")
+            st.markdown("<h3 style='text-align:center;'>Please wait...</h3>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
         
         # Check if generation is complete
         if "generating_next_content" in st.session_state:
@@ -579,316 +604,277 @@ def main():
         # Don't show any other UI elements during transition
         return
     
-    # Dynamic title based on setup status
-    if st.session_state["setup_complete"]:
-        # Generate a dynamic title for the pet's adventure
-        print(f"Debug - setup_complete: {st.session_state['setup_complete']}")
-        print(f"Debug - story_title in session: {'story_title' in st.session_state}")
-        print(f"Debug - current story_title: {st.session_state.get('story_title', 'Not set')}")
-        
-        # Only generate a title if one doesn't exist
-        if "story_title" not in st.session_state or not st.session_state.get("story_title"):
-            print(f"Debug - Generating new title for {st.session_state['pet_name']} the {st.session_state['pet_type']}")
+    # Render the main UI in the container
+    with main_container.container():
+        # Dynamic title based on setup status
+        if st.session_state["setup_complete"]:
+            # Generate a dynamic title for the pet's adventure
+            print(f"Debug - setup_complete: {st.session_state['setup_complete']}")
+            print(f"Debug - story_title in session: {'story_title' in st.session_state}")
+            print(f"Debug - current story_title: {st.session_state.get('story_title', 'Not set')}")
             
-            # Generate a title for the pet's adventure
-            story_title = event_service.generate_story_title(
-                pet_name=st.session_state["pet_name"],
-                pet_type=st.session_state["pet_type"],
-                current_event=st.session_state.get("current_event")
-            )
-            
-            print(f"Debug - Generated title: {story_title}")
-            
-            # Store the title in session state
-            st.session_state["story_title"] = story_title
-            
-            # Save the updated title to pet data
-            pet_data = pet_service.load_pet_data(st.session_state["session_id"]) or {}
-            pet_data["story_title"] = story_title
-            pet_data["story_location"] = st.session_state["story_location"]
-            pet_service.save_pet_data(pet_data, st.session_state["session_id"])
-            print(f"Debug - Saved title to pet data: {story_title}")
-        
-        # Display the title - use a default if somehow still not set
-        title_to_display = st.session_state.get("story_title", f"{st.session_state['pet_name']}'s Great Adventure")
-        print(f"Debug - Displaying title: {title_to_display}")
-        st.title(f"🐾 {title_to_display}")
-    else:
-        st.title("🐾 Virtual Pet Simulator")
-    
-    # Welcome screen and pet setup
-    if not st.session_state["setup_complete"]:
-        st.header("Welcome to Virtual Pet Simulator!")
-        st.write("Let's set up your new virtual pet companion.")
-        
-        # Pet selection
-        available_pets = pet_service.get_available_pets()
-        pet_options = list(available_pets.keys())  # These are the internal keys like "cat"
-        pet_display_names = list(available_pets.values())  # These are the display names like "Cat"
-        
-        # Create columns for a nicer layout
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            # Pet type selection with preview images
-            st.subheader("Choose your pet:")
-            
-            # Find the index of the current pet type's display name
-            default_index = 0
-            if st.session_state["pet_type"] in pet_options:
-                pet_key_index = pet_options.index(st.session_state["pet_type"])
-                default_index = pet_key_index
-            
-            st.selectbox(
-                "Pet Type",
-                options=pet_display_names,
-                index=default_index,
-                key="pet_type_select",
-                format_func=lambda x: x,
-                on_change=on_pet_type_change
-            )
-            
-            # Show preview of selected pet
-            selected_display_name = st.session_state["pet_type_select"]
-            selected_index = pet_display_names.index(selected_display_name)
-            selected_pet_type = pet_options[selected_index]  # This is the internal key like "cat"
-            
-            # Get the image path for the selected pet
-            image_path = pet_service.get_pet_image_path(selected_pet_type, "happy")
-            st.image(image_path, width=200, caption=f"{selected_display_name} Preview")
-        
-        with col2:
-            # Pet naming
-            st.subheader("Name your pet:")
-            
-            # Create a row with the text input and random name button
-            name_col1, name_col2 = st.columns([3, 1])
-            
-            with name_col1:
-                st.text_input(
-                    "Pet Name",
-                    value=st.session_state.get("pet_name", ""),
-                    key="pet_name_input",
-                    placeholder="Enter a name for your pet"
+            # Only generate a title if one doesn't exist
+            if "story_title" not in st.session_state or not st.session_state.get("story_title"):
+                print(f"Debug - Generating new title for {st.session_state['pet_name']} the {st.session_state['pet_type']}")
+                
+                # Generate a title for the pet's adventure
+                story_title = event_service.generate_story_title(
+                    pet_name=st.session_state["pet_name"],
+                    pet_type=st.session_state["pet_type"],
+                    current_event=st.session_state.get("current_event")
                 )
+                
+                print(f"Debug - Generated title: {story_title}")
+                
+                # Store the title in session state
+                st.session_state["story_title"] = story_title
+                
+                # Save the updated title to pet data
+                pet_data = pet_service.load_pet_data(st.session_state["session_id"]) or {}
+                pet_data["story_title"] = story_title
+                pet_data["story_location"] = st.session_state["story_location"]
+                pet_service.save_pet_data(pet_data, st.session_state["session_id"])
+                print(f"Debug - Saved title to pet data: {story_title}")
             
-            with name_col2:
-                st.button("🎲 Random", on_click=generate_random_name, help="Generate a random name for your pet")
+            # Display the title
+            st.title(st.session_state["story_title"])
             
-            # Pet description
-            st.write("Your pet will need your care and attention. Make sure to feed it, play with it, and let it rest!")
-            
-            # Young Reader Mode toggle
-            st.write("---")
-            st.subheader("Reading Level")
-            col_a, col_b = st.columns([1, 2])
-            with col_a:
-                st.toggle(
-                    "Young Reader Mode",
-                    key="young_reader_mode_checkbox",
-                    help="Simplifies text for young readers (ages 4-6)",
-                    value=st.session_state.get("young_reader_mode", True)
-                )
-            with col_b:
-                if st.session_state.get("young_reader_mode_checkbox", False):
-                    st.markdown("✅ **Simple words and shorter stories for young readers!**")
-                else:
-                    st.markdown("📚 **Standard reading level**")
-        
-        # Start button
-        st.button("Start Your Pet Adventure!", on_click=complete_setup)
-    
-    # Main pet interface (only shown after setup is complete)
-    else:
-        # Create a layout with two columns
-        col1, col2 = st.columns([1, 2])
+            # Create a layout with two columns
+            col1, col2 = st.columns([1, 2])
 
-        with col1:
-            st.subheader(f"{st.session_state['pet_name']}'s Status")
-            
-            # Enhanced stats display with custom styling
-            stats = [
-                {"name": "Hunger", "value": st.session_state['pet_state']['hunger'], "max": 10},
-                {"name": "Energy", "value": st.session_state['pet_state']['energy'], "max": 10},
-                {"name": "Happiness", "value": st.session_state['pet_state']['happiness'], "max": 10}
-            ]
-            
-            for stat in stats:
-                # Calculate percentage for the progress bar
-                percentage = (stat["value"] / stat["max"]) * 100
+            with col1:
+                st.subheader(f"{st.session_state['pet_name']}'s Status")
                 
-                # Choose color based on value (red if low, green if high)
-                color = "#ff4b4b" if percentage < 30 else "#4bb543" if percentage > 70 else "#f9c846"
+                # Enhanced stats display with custom styling
+                stats = [
+                    {"name": "Hunger", "value": st.session_state['pet_state']['hunger'], "max": 10},
+                    {"name": "Energy", "value": st.session_state['pet_state']['energy'], "max": 10},
+                    {"name": "Happiness", "value": st.session_state['pet_state']['happiness'], "max": 10}
+                ]
                 
-                st.markdown(f"""
-                <div style="margin-bottom: 20px;">
-                    <div style="font-size: 18px; font-weight: 500; margin-bottom: 5px;">{stat["name"]}: {stat["value"]}/{stat["max"]}</div>
-                    <div style="background-color: #e0e0e0; border-radius: 10px; height: 10px; width: 100%;">
-                        <div style="background-color: {color}; width: {percentage}%; height: 10px; border-radius: 10px;"></div>
+                for stat in stats:
+                    # Calculate percentage for the progress bar
+                    percentage = (stat["value"] / stat["max"]) * 100
+                    
+                    # Choose color based on value (red if low, green if high)
+                    color = "#ff4b4b" if percentage < 30 else "#4bb543" if percentage > 70 else "#f9c846"
+                    
+                    st.markdown(f"""
+                    <div style="margin-bottom: 20px;">
+                        <div style="font-size: 18px; font-weight: 500; margin-bottom: 5px;">{stat["name"]}: {stat["value"]}/{stat["max"]}</div>
+                        <div style="background-color: #e0e0e0; border-radius: 10px; height: 10px; width: 100%;">
+                            <div style="background-color: {color}; width: {percentage}%; height: 10px; border-radius: 10px;"></div>
+                        </div>
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Only show action buttons if there's no active event
-            if not st.session_state.get("current_event"):
-                st.button("Feed", on_click=update_pet_state, args=("feed",))
-                st.button("Play", on_click=update_pet_state, args=("play",))
-                st.button("Rest", on_click=update_pet_state, args=("rest",))
-            
+                    """, unsafe_allow_html=True)
+                
+                # Only show action buttons if there's no active event
+                if not st.session_state.get("current_event"):
+                    st.button("Feed", on_click=update_pet_state, args=("feed",))
+                    st.button("Play", on_click=update_pet_state, args=("play",))
+                    st.button("Rest", on_click=update_pet_state, args=("rest",))
+                
 
-        with col2:
-            # Display the pet image
-            mood = st.session_state["pet_state"]["mood"]
-            
-            # Check if there's an active event with an image URL
+            with col2:
+                # Display the pet image
+                mood = st.session_state["pet_state"]["mood"]
+                
+                # Check if there's an active event with an image URL
+                if "current_event" in st.session_state and st.session_state["current_event"]:
+                    event = st.session_state["current_event"]
+                    
+                    if "image_url" in event:
+                        # Display the event-specific image
+                        st.image(event["image_url"], width=450)
+                    else:
+                        # If there's an event but no image yet, show the default image
+                        image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
+                        st.image(image_path, width=450)
+                else:
+                    # Fall back to the static mood-based image
+                    image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
+                    st.image(image_path, width=450)
+                
+                # If there's no event, show the pet's mood
+                if not st.session_state.get("current_event"):
+                    st.subheader(f"{st.session_state['pet_name']} looks {mood}!")
+                
+            # Check if there's an active event - display it below the pet image
             if "current_event" in st.session_state and st.session_state["current_event"]:
                 event = st.session_state["current_event"]
                 
-                # Check if we're in the process of generating content
-                if "generating_next_content" in st.session_state and st.session_state["generating_next_content"]["image"]["status"] in ["pending", "in_progress"]:
-                    # Show a loading indicator for the image
-                    with st.container():
-                        # Display a placeholder image with a loading overlay
-                        image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
-                        st.image(image_path, width=450)
-                        
-                        # Add a loading overlay
-                        st.markdown("""
-                        <div style="position: relative; margin-top: -300px; margin-bottom: 300px; text-align: center;">
-                            <div style="background-color: rgba(255, 255, 255, 0.7); padding: 20px; border-radius: 10px; display: inline-block;">
-                                <div style="display: flex; flex-direction: column; align-items: center;">
-                                    <div class="spinner"></div>
-                                    <p style="margin-top: 10px; font-weight: bold;">Creating a custom image for this adventure...</p>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <style>
-                        .spinner {
-                            border: 5px solid rgba(0, 0, 0, 0.1);
-                            width: 50px;
-                            height: 50px;
-                            border-radius: 50%;
-                            border-left-color: #09f;
-                            animation: spin 1s linear infinite;
-                        }
-                        
-                        @keyframes spin {
-                            0% { transform: rotate(0deg); }
-                            100% { transform: rotate(360deg); }
-                        }
-                        </style>
-                        """, unsafe_allow_html=True)
-                elif "image_url" in event:
-                    # Display the event-specific image
-                    st.image(event["image_url"], width=450)
-                else:
-                    # If there's an event but no image yet, show a loading indicator and the default image
-                    with st.spinner("Generating a custom image for this event..."):
-                        # Fall back to the static mood-based image while loading
-                        image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
-                        st.image(image_path, width=450)
-            else:
-                # Fall back to the static mood-based image
-                image_path = pet_service.get_pet_image_path(st.session_state["pet_type"], mood)
-                st.image(image_path, width=450)
-            
-            # If there's no event, show the pet's mood
-            if not st.session_state.get("current_event"):
-                st.subheader(f"{st.session_state['pet_name']} looks {mood}!")
-            
-        # Check if there's an active event - display it below the pet image
-        if "current_event" in st.session_state and st.session_state["current_event"]:
-            event = st.session_state["current_event"]
-            
-            # Create a container for the event
-            with st.container():
-                st.markdown("---")
-                
-                # Display the story description
-                st.markdown(f'<div style="font-size: 20px;">{event["description"]}</div>', unsafe_allow_html=True)
-                
-                # Generate a unique identifier for this event
-                event_id = f"{event.get('id', '')}"
-                if not event_id:
-                    # If the event doesn't have an ID, create one from the description
-                    import hashlib
-                    event_id = hashlib.md5(event["description"].encode()).hexdigest()[:10]
-                
-                # Add a button to play audio
-                col1, col2 = st.columns([1, 3])
-                with col1:
-                    if st.button("🔊 Play Story Audio", 
-                                help="Listen to the story and options read aloud",
-                                on_click=generate_and_play_audio,
-                                args=(event,)):
-                        pass  # The on_click handler will take care of playing the audio
-                
-                # Add extra space between description and options
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # Display the event options
-                if "options" in event:
-                    # Always show options regardless of generating state
-                    st.write("---")
-                    st.subheader(f"What should {st.session_state['pet_name']} do next?")
+                # Create a container for the event
+                with st.container():
+                    st.markdown("---")
                     
-                    # Add some space after the header
+                    # Display the story description
+                    st.markdown(f'<div style="font-size: 20px;">{event["description"]}</div>', unsafe_allow_html=True)
+                    
+                    # Generate a unique identifier for this event
+                    event_id = f"{event.get('id', '')}"
+                    if not event_id:
+                        # If the event doesn't have an ID, create one from the description
+                        import hashlib
+                        event_id = hashlib.md5(event["description"].encode()).hexdigest()[:10]
+                    
+                    # Add a button to play audio
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        if st.button("🔊 Play Story Audio", 
+                                    help="Listen to the story and options read aloud",
+                                    on_click=generate_and_play_audio,
+                                    args=(event,)):
+                            pass  # The on_click handler will take care of playing the audio
+                    
+                    # Add extra space between description and options
                     st.markdown("<br>", unsafe_allow_html=True)
                     
-                    # Create a custom component for each option
-                    for i, option in enumerate(event["options"]):
-                        # Format the option text with effects
-                        effects = option["effect"]
-                        effects_text = []
-                        if effects["hunger"] != 0:
-                            effects_text.append(f"Hunger {'+' if effects['hunger'] > 0 else ''}{effects['hunger']}")
-                        if effects["energy"] != 0:
-                            effects_text.append(f"Energy {'+' if effects['energy'] > 0 else ''}{effects['energy']}")
-                        if effects["happiness"] != 0:
-                            effects_text.append(f"Happiness {'+' if effects['happiness'] > 0 else ''}{effects['happiness']}")
+                    # Display the event options
+                    if "options" in event:
+                        # Always show options regardless of generating state
+                        st.write("---")
+                        st.subheader(f"What should {st.session_state['pet_name']} do next?")
                         
-                        # Format the effects text
-                        effects_str = f" ({', '.join(effects_text)})" if effects_text else ""
+                        # Add some space after the header
+                        st.markdown("<br>", unsafe_allow_html=True)
                         
-                        # Create a custom component with columns
-                        cols = st.columns([1, 15])
-                        
-                        # Number in the first column
-                        with cols[0]:
-                            # Create a circular container for the number
-                            st.markdown(f"""
-                            <div style="
-                                width: 30px;
-                                height: 30px;
-                                border-radius: 50%;
-                                background-color: #f0f2f6;
-                                border: 1px solid #ccc;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                font-weight: bold;
-                                margin-top: 5px;
-                            ">
-                                {i+1}
-                            </div>
-                            """, unsafe_allow_html=True)
+                        # Create a custom component for each option
+                        for i, option in enumerate(event["options"]):
+                            # Format the option text with effects
+                            effects = option["effect"]
+                            effects_text = []
+                            if effects["hunger"] != 0:
+                                effects_text.append(f"Hunger {'+' if effects['hunger'] > 0 else ''}{effects['hunger']}")
+                            if effects["energy"] != 0:
+                                effects_text.append(f"Energy {'+' if effects['energy'] > 0 else ''}{effects['energy']}")
+                            if effects["happiness"] != 0:
+                                effects_text.append(f"Happiness {'+' if effects['happiness'] > 0 else ''}{effects['happiness']}")
                             
-                        # Option text in the second column
-                        with cols[1]:
-                            # Create a button that looks like text
-                            if st.button(f"{option['text']}{effects_str}", key=f"option_{i}"):
-                                handle_event_choice(i)
-                        
-                        # Add some space between options
-                        st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+                            # Format the effects text
+                            effects_str = f" ({', '.join(effects_text)})" if effects_text else ""
+                            
+                            # Create a custom component with columns
+                            cols = st.columns([1, 15])
+                            
+                            # Number in the first column
+                            with cols[0]:
+                                # Create a circular container for the number
+                                st.markdown(f"""
+                                <div style="
+                                    width: 30px;
+                                    height: 30px;
+                                    border-radius: 50%;
+                                    background-color: #f0f2f6;
+                                    border: 1px solid #ccc;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    font-weight: bold;
+                                    margin-top: 5px;
+                                ">
+                                    {i+1}
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                            # Option text in the second column
+                            with cols[1]:
+                                # Create a button that looks like text
+                                if st.button(f"{option['text']}{effects_str}", key=f"option_{i}"):
+                                    handle_event_choice(i)
+                            
+                            # Add some space between options
+                            st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
-        # Add the reset button at the very bottom of the page
-        st.markdown("---")
-        
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            st.button("Reset Pet", on_click=reset_pet, type="secondary", help="Start over with a new pet")
+            # Add the reset button at the very bottom of the page
+            st.markdown("---")
+            
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col2:
+                st.button("Reset Pet", on_click=reset_pet, type="secondary", help="Start over with a new pet")
+        else:
+            # Setup screen
+            st.title("Virtual Pet Setup")
+            
+            # Welcome screen and pet setup
+            st.header("Welcome to Virtual Pet Simulator!")
+            st.write("Let's set up your new virtual pet companion.")
+            
+            # Pet selection
+            available_pets = pet_service.get_available_pets()
+            pet_options = list(available_pets.keys())  # These are the internal keys like "cat"
+            pet_display_names = list(available_pets.values())  # These are the display names like "Cat"
+            
+            # Create columns for a nicer layout
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                # Pet type selection with preview images
+                st.subheader("Choose your pet:")
+                
+                # Find the index of the current pet type's display name
+                default_index = 0
+                if st.session_state["pet_type"] in pet_options:
+                    pet_key_index = pet_options.index(st.session_state["pet_type"])
+                    default_index = pet_key_index
+                
+                st.selectbox(
+                    "Pet Type",
+                    options=pet_display_names,
+                    index=default_index,
+                    key="pet_type_select",
+                    format_func=lambda x: x,
+                    on_change=on_pet_type_change
+                )
+                
+                # Show preview of selected pet
+                selected_display_name = st.session_state["pet_type_select"]
+                selected_index = pet_display_names.index(selected_display_name)
+                selected_pet_type = pet_options[selected_index]  # This is the internal key like "cat"
+                
+                # Get the image path for the selected pet
+                image_path = pet_service.get_pet_image_path(selected_pet_type, "happy")
+                st.image(image_path, width=200, caption=f"{selected_display_name} Preview")
+            
+            with col2:
+                # Pet naming
+                st.subheader("Name your pet:")
+                
+                # Create a row with the text input and random name button
+                name_col1, name_col2 = st.columns([3, 1])
+                
+                with name_col1:
+                    st.text_input(
+                        "Pet Name",
+                        value=st.session_state.get("pet_name", ""),
+                        key="pet_name_input",
+                        placeholder="Enter a name for your pet"
+                    )
+                
+                with name_col2:
+                    st.button("🎲 Random", on_click=generate_random_name, help="Generate a random name for your pet")
+                
+                # Pet description
+                st.write("Your pet will need your care and attention. Make sure to feed it, play with it, and let it rest!")
+                
+                # Young Reader Mode toggle
+                st.write("---")
+                st.subheader("Reading Level")
+                col_a, col_b = st.columns([1, 2])
+                with col_a:
+                    st.toggle(
+                        "Young Reader Mode",
+                        key="young_reader_mode_checkbox",
+                        help="Simplifies text for young readers (ages 4-6)",
+                        value=st.session_state.get("young_reader_mode", True)
+                    )
+                with col_b:
+                    if st.session_state.get("young_reader_mode_checkbox", False):
+                        st.markdown("✅ **Simple words and shorter stories for young readers!**")
+                    else:
+                        st.markdown("📚 **Standard reading level**")
+            
+            # Start button
+            st.button("Start Your Pet Adventure!", on_click=complete_setup)
 
 if __name__ == "__main__":
     main() 
